@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
-import { EmploymentWorkspacePage } from "../_components/employment-platform";
+import { WorkerWorkspacePage } from "../_components/role-scoped-workspaces";
 
 export const metadata: Metadata = {
-  title: "SAIN Finance - Employee Workspace",
+  title: "SAIN - Worker Workspace",
   description:
-    "Employee dashboard, pay timeline, expected pay, pending pay events, profile, activity history, and support entry point.",
+    "Role-scoped worker dashboard for pay, activity, documents, support, career, and profile.",
 };
 
 export default function EmployeeWorkspaceRoute() {
-  return <EmploymentWorkspacePage activeWorkspace="employee" />;
+  return <WorkerWorkspacePage />;
 }
