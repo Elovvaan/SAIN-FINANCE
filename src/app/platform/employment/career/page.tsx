@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
-import { EmploymentWorkspacePage } from "../_components/employment-platform";
+import { WorkerWorkspacePage } from "../_components/role-scoped-workspaces";
 
 export const metadata: Metadata = {
-  title: "SAIN Finance - Career OS",
+  title: "SAIN - Career OS",
   description:
-    "Worker-owned Career OS sandbox for employment timeline, skills passport, document vault, mock job matches, and career recommendations.",
+    "Worker-owned Career OS connected to the worker pay, activity, documents, support, and profile flow.",
 };
 
 export default function CareerOsRoute() {
-  return <EmploymentWorkspacePage activeWorkspace="career" />;
+  return <WorkerWorkspacePage />;
 }
