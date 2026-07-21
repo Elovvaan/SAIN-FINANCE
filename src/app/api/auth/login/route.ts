@@ -13,7 +13,14 @@ function equalSecret(left: string, right: string) {
 export async function POST(request: NextRequest) {
   const configuredEmail = process.env.SAIN_ADMIN_EMAIL;
   const configuredPassword = process.env.SAIN_ADMIN_PASSWORD;
-  if (!configuredEmail || !configuredPassword || configuredPassword.length < 12) {
+  const configuredSessionSecret = process.env.SAIN_SESSION_SECRET;
+  if (
+    !configuredEmail ||
+    !configuredPassword ||
+    configuredPassword.length < 12 ||
+    !configuredSessionSecret ||
+    configuredSessionSecret.length < 32
+  ) {
     return NextResponse.json({ error: "OPERATOR_LOGIN_NOT_CONFIGURED" }, { status: 503 });
   }
 
