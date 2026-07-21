@@ -1,12 +1,7 @@
-import type { Metadata } from "next";
-import { EmploymentWorkspacePage } from "../_components/employment-platform";
+import { redirect } from "next/navigation";
+import { requireOperatorPage } from "@/server/auth/require-operator-page";
 
-export const metadata: Metadata = {
-  title: "SAIN Finance - Assets and Settlement",
-  description:
-    "Digital asset records, internal wallets, settlement instructions, escrow positions, and asset activity for the SAIN Finance sandbox.",
-};
-
-export default function AssetsWorkspaceRoute() {
-  return <EmploymentWorkspacePage activeWorkspace="assets" />;
+export default async function AssetsWorkspaceRoute() {
+  await requireOperatorPage();
+  redirect("/operator/operations?view=assets");
 }
