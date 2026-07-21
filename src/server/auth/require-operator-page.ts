@@ -2,12 +2,13 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { OPERATOR_COOKIE, verifyOperatorSession } from "./operator-session";
 
-export async function requireOperatorPage() {
+export async function requireOperatorPage(returnTo: string = "/operator/operations") {
   const cookieStore = await cookies();
   const session = verifyOperatorSession(cookieStore.get(OPERATOR_COOKIE)?.value);
 
   if (!session) {
-    redirect("/operator/login?returnTo=/operator/operations");
+    const safeReturnTo = returnTo.startsWith("/") && !returnTo.startsWith("//") ? returnTo : "/operator/operations";
+    redirect(`/operator/login?returnTo=${encodeURIComponent(safeReturnTo)}`);
   }
 
   return session;
