@@ -1,10 +1,16 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+
+function safeReturnPath(value: string | null) {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/platform/filing-office";
+  return value;
+}
 
 export default function OperatorLoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -24,7 +30,7 @@ export default function OperatorLoginPage() {
       setError(body.error === "INVALID_CREDENTIALS" ? "The email or password is incorrect." : "Operator login is not configured.");
       return;
     }
-    router.replace("/platform/filing-office");
+    router.replace(safeReturnPath(searchParams.get("returnTo")));
     router.refresh();
   }
 
