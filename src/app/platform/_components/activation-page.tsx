@@ -39,6 +39,8 @@ type ActivationPageProps = {
   confirmationTitle: string;
   confirmationCopy: string;
   readinessItems: string[];
+  continueHref?: string;
+  continueLabel?: string;
   children?: ReactNode;
 };
 
@@ -53,6 +55,8 @@ export function ActivationPage({
   confirmationTitle,
   confirmationCopy,
   readinessItems,
+  continueHref,
+  continueLabel = `Enter ${workspace}`,
   children,
 }: ActivationPageProps) {
   const [submitted, setSubmitted] = useState(false);
@@ -140,13 +144,24 @@ export function ActivationPage({
                   {confirmationTitle}
                 </h3>
                 <p className="mt-4 leading-7 text-slate-300">{confirmationCopy}</p>
-                <button
-                  type="button"
-                  onClick={() => setSubmitted(false)}
-                  className="mt-7 inline-flex h-11 items-center border border-white/15 px-5 text-sm font-semibold text-white transition hover:border-emerald-300/60 hover:text-emerald-200"
-                >
-                  Review activation details
-                </button>
+                <div className="mt-7 flex flex-col gap-3 sm:flex-row">
+                  {continueHref && (
+                    <Link
+                      href={continueHref}
+                      className="inline-flex h-11 items-center justify-center gap-2 rounded-full bg-emerald-400 px-5 text-sm font-semibold text-black transition hover:bg-emerald-300"
+                    >
+                      {continueLabel}
+                      <ArrowRight className="h-4 w-4" aria-hidden />
+                    </Link>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setSubmitted(false)}
+                    className="inline-flex h-11 items-center justify-center border border-white/15 px-5 text-sm font-semibold text-white transition hover:border-emerald-300/60 hover:text-emerald-200"
+                  >
+                    Review activation details
+                  </button>
+                </div>
               </div>
             ) : (
               <form onSubmit={onSubmit} className="grid gap-4">
