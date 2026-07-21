@@ -8,7 +8,7 @@
     "start": "next start -H 0.0.0.0",
     "lint": "eslint",
     "typecheck": "tsc --noEmit --incremental false",
-    "test": "echo \"No automated tests configured for this sandbox yet.\""
+    "test": "node --test tests/*.test.mjs"
   },
   "engines": {
     "node": ">=20.9.0"
