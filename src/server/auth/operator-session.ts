@@ -46,7 +46,12 @@ export function verifyOperatorSession(token: string | undefined): OperatorSessio
   const [payload, suppliedSignature] = token.split(".");
   if (!payload || !suppliedSignature) return null;
 
-  const expectedSignature = sign(payload);
+  let expectedSignature: string;
+  try {
+    expectedSignature = sign(payload);
+  } catch {
+    return null;
+  }
   const supplied = Buffer.from(suppliedSignature);
   const expected = Buffer.from(expectedSignature);
   if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return null;
