@@ -288,8 +288,16 @@ export async function runFilingOfficeOperation(input: Record<string, unknown>) {
     case "grantAuthority": {
       const requestedScope = String(input.scope || "");
       const subjectActorId = String(input.subjectActorId || "");
+      const effectiveAt = now();
+      const expiresAt = input.expiresAt ? String(input.expiresAt) : undefined;
       if (!requestedScope) throw new Error("MISSING_AUTHORITY_SCOPE");
       if (!subjectActorId) throw new Error("MISSING_AUTHORITY_SUBJECT");
+      if (expiresAt) {
+        const expiresAtTime = Date.parse(expiresAt);
+        if (Number.isNaN(expiresAtTime) || expiresAtTime <= Date.parse(effectiveAt)) {
+          throw new Error("INVALID_AUTHORITY_EXPIRY");
+        }
+      }
 
       const authorization = authorizeAuthorityGrant({
         authorities: state.authorities,
@@ -304,8 +312,8 @@ export async function runFilingOfficeOperation(input: Record<string, unknown>) {
         actorId: subjectActorId,
         scope: requestedScope,
         status: "ACTIVE",
-        effectiveAt: now(),
-        expiresAt: input.expiresAt ? String(input.expiresAt) : undefined,
+        effectiveAt,
+        expiresAt,
       };
       state.authorities.push(authority);
       audit(
