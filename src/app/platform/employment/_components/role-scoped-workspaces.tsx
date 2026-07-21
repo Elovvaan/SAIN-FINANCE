@@ -98,6 +98,10 @@ export function WorkerWorkspacePage() {
   }, []);
 
   useEffect(() => {
+    if (cases.length === 0) {
+      window.sessionStorage.removeItem("sain-worker-support-cases");
+      return;
+    }
     window.sessionStorage.setItem("sain-worker-support-cases", JSON.stringify(cases));
   }, [cases]);
 
