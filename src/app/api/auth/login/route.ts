@@ -24,7 +24,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "OPERATOR_LOGIN_NOT_CONFIGURED" }, { status: 503 });
   }
 
-  const body = (await request.json()) as { email?: string; password?: string };
+  let body: { email?: unknown; password?: unknown };
+  try {
+    body = (await request.json()) as { email?: unknown; password?: unknown };
+  } catch {
+    return NextResponse.json({ error: "INVALID_JSON" }, { status: 400 });
+  }
   const email = String(body.email || "").trim().toLowerCase();
   const password = String(body.password || "");
   const valid = equalSecret(email, configuredEmail.trim().toLowerCase()) && equalSecret(password, configuredPassword);
