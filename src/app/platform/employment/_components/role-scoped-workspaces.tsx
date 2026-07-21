@@ -142,9 +142,9 @@ export function WorkerWorkspacePage() {
       label="Worker Workspace"
       nav={
         <nav className="hidden gap-2 overflow-x-auto lg:flex" aria-label="Worker navigation">
-          {workerNav.map((item) => (
-            <Link key={item.label} href={item.href} className="whitespace-nowrap border border-white/10 px-3 py-2 text-sm text-slate-300 hover:border-emerald-300/50 hover:text-white">
-              {item.label}
+          {workerNav.map(({ label, href, icon: Icon }) => (
+            <Link key={label} href={href} className="inline-flex items-center gap-2 whitespace-nowrap border border-white/10 px-3 py-2 text-sm text-slate-300 hover:border-emerald-300/50 hover:text-white">
+              <Icon className="h-4 w-4 text-emerald-300" aria-hidden /> {label}
             </Link>
           ))}
         </nav>
