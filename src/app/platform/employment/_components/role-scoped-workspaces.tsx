@@ -93,7 +93,8 @@ export function WorkerWorkspacePage() {
 
   useEffect(() => {
     const stored = window.sessionStorage.getItem("sain-worker-support-cases");
-    if (stored) setCases(JSON.parse(stored) as SupportCase[]);
+    if (!stored) return;
+    try { setCases(JSON.parse(stored) as SupportCase[]); } catch { window.sessionStorage.removeItem("sain-worker-support-cases"); }
   }, []);
 
   useEffect(() => {
