@@ -28,6 +28,9 @@ export async function POST(request: NextRequest) {
     }
 
     const body = (await request.json()) as Record<string, unknown>;
+    if (body === null || typeof body !== "object" || Array.isArray(body)) {
+      return NextResponse.json({ error: "INVALID_BODY" }, { status: 400 });
+    }
     if (!body.operation) {
       return NextResponse.json({ error: "MISSING_OPERATION" }, { status: 400 });
     }
