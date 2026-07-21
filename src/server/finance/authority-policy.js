@@ -22,7 +22,7 @@ export function isAuthorityActive(authority, actorId, scope, instant = Date.now(
  * and only when the caller supplies the deployment bootstrap token.
  * After bootstrap, an active INSTITUTION_ADMIN authority is required.
  *
- * @param {{ authorities: Array<{ actorId: string, scope: string, status: string, effectiveAt: string, expiresAt?: string }>, actorId: string, requestedScope: string, providedBootstrapToken?: string, configuredBootstrapToken?: string, instant?: number }} input
+ * @param {{ authorities: Array<{ id: string, actorId: string, scope: string, status: string, effectiveAt: string, expiresAt?: string }>, actorId: string, requestedScope: string, providedBootstrapToken?: string, configuredBootstrapToken?: string, instant?: number }} input
  */
 export function authorizeAuthorityGrant(input) {
   const instant = input.instant ?? Date.now();
