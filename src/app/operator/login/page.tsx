@@ -4,12 +4,12 @@ import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 
 function safeReturnPath(value: string | null) {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/platform/filing-office";
+  if (!value || !value.startsWith("/") || value.startsWith("//")) return "/operator/operations";
   return value;
 }
 
 function currentReturnPath() {
-  if (typeof window === "undefined") return "/platform/filing-office";
+  if (typeof window === "undefined") return "/operator/operations";
   return safeReturnPath(new URLSearchParams(window.location.search).get("returnTo"));
 }
 
