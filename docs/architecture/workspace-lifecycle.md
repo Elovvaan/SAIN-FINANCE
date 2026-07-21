@@ -39,7 +39,7 @@ Workspace activation creates the relationship between the SAIN Identity and a wo
 3. Accept workspace-specific terms
 4. Assign or request a role
 5. Create workspace membership
-6. establish permissions
+6. Establish permissions
 7. Mark workspace active
 8. Continue to workspace bootstrap
 
