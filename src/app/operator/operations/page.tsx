@@ -24,8 +24,9 @@ export default async function InternalOperationsPage({
 }: {
   searchParams: Promise<{ view?: string }>;
 }) {
-  const session = await requireOperatorPage();
   const params = await searchParams;
+  const returnTo = params.view ? `/operator/operations?view=${params.view}` : "/operator/operations";
+  const session = await requireOperatorPage(returnTo);
   const activeId = operations.some((item) => item.id === params.view) ? (params.view as OperationId) : "intake";
   const active = operations.find((item) => item.id === activeId) ?? operations[0];
   const ActiveIcon = active.icon;
