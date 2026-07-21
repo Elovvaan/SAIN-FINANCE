@@ -149,13 +149,11 @@ This layer supports authorized operational and network functions:
 - Filing Office
 - Authority and permissions
 - Compliance records
-- Audit trails
 - Collateral registry
 - Asset verification
-- transfer network
-- settlement
-- on-chain registry or representation
-
+- Transfer Network
+- Settlement
+- On-Chain Registry or Representation
 These functions do not appear as ordinary customer dashboard features.
 
 ## Current Career OS Route
