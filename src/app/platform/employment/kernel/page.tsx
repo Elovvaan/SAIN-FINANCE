@@ -1,12 +1,7 @@
-import type { Metadata } from "next";
-import { EmploymentWorkspacePage } from "../_components/employment-platform";
+import { redirect } from "next/navigation";
+import { requireOperatorPage } from "@/server/auth/require-operator-page";
 
-export const metadata: Metadata = {
-  title: "SAIN Finance - Financial Kernel Simulator",
-  description:
-    "Sandbox Financial Kernel simulator for claim, validation, admission, commit, ledger, projection, and response states.",
-};
-
-export default function KernelSimulatorRoute() {
-  return <EmploymentWorkspacePage activeWorkspace="kernel" />;
+export default async function KernelSimulatorRoute() {
+  await requireOperatorPage("/operator/operations?view=kernel");
+  redirect("/operator/operations?view=kernel");
 }

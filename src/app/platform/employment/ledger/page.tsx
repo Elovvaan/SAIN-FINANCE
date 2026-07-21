@@ -1,12 +1,7 @@
-import type { Metadata } from "next";
-import { EmploymentWorkspacePage } from "../_components/employment-platform";
+import { redirect } from "next/navigation";
+import { requireOperatorPage } from "@/server/auth/require-operator-page";
 
-export const metadata: Metadata = {
-  title: "SAIN Finance - Ledger Sandbox",
-  description:
-    "Mock double-entry ledger sandbox with settled, pending, held, and available projections for admitted sandbox pay events.",
-};
-
-export default function LedgerSandboxRoute() {
-  return <EmploymentWorkspacePage activeWorkspace="ledger" />;
+export default async function LedgerSandboxRoute() {
+  await requireOperatorPage("/operator/operations?view=ledger");
+  redirect("/operator/operations?view=ledger");
 }

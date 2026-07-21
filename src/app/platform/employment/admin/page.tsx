@@ -1,12 +1,7 @@
-import type { Metadata } from "next";
-import { EmploymentWorkspacePage } from "../_components/employment-platform";
+import { redirect } from "next/navigation";
+import { requireOperatorPage } from "@/server/auth/require-operator-page";
 
-export const metadata: Metadata = {
-  title: "SAIN Finance - Admin Console",
-  description:
-    "Admin console prototype for claims queue, event log, account states, disputes, reconciliation status, risk flags, and manual review.",
-};
-
-export default function AdminConsoleRoute() {
-  return <EmploymentWorkspacePage activeWorkspace="admin" />;
+export default async function AdminConsoleRoute() {
+  await requireOperatorPage("/operator/operations?view=admin");
+  redirect("/operator/operations?view=admin");
 }
