@@ -117,14 +117,16 @@ export function WorkerWorkspacePage() {
 
   function submitCase(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const next: SupportCase = {
-      id: `SC-${String(cases.length + 1).padStart(3, "0")}`,
-      subject,
-      detail: detail || "Worker requested review of a paycheck-related issue.",
-      status: "Open",
-      createdAt: new Date().toLocaleString(),
-    };
-    setCases((current) => [next, ...current]);
+    setCases((current) => {
+      const next: SupportCase = {
+        id: `SC-${String(current.length + 1).padStart(3, "0")}`,
+        subject,
+        detail: detail || "Worker requested review of a paycheck-related issue.",
+        status: "Open",
+        createdAt: new Date().toLocaleString(),
+      };
+      return [next, ...current];
+    });
     setDetail("");
     setSaved(true);
     window.setTimeout(() => setSaved(false), 1800);
