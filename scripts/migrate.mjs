@@ -75,7 +75,8 @@ async function migrate() {
         console.log(`Applied migration ${file}`);
       } catch (error) {
         await client.query("ROLLBACK");
-        throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`MIGRATION_FAILED:${file}:${message}`);
       }
     }
   } finally {
