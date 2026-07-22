@@ -14,6 +14,7 @@ export class JsonFileStateRepository {
       options.dataDirectory || process.env.SAIN_DATA_DIR || path.join(process.cwd(), ".sain-data");
     this.storeFile = path.join(this.dataDirectory, options.fileName);
     this.backupFile = path.join(this.dataDirectory, options.backupFileName);
+    this.transactionTail = Promise.resolve();
   }
 
   async load() {
@@ -48,6 +49,22 @@ export class JsonFileStateRepository {
     await rename(temporary, this.storeFile);
   }
 
+  transact(work) {
+    const transaction = this.transactionTail.then(async () => {
+      const state = await this.load();
+      const result = await work(state);
+      await this.save(state);
+      return result;
+    });
+
+    this.transactionTail = transaction.then(
+      () => undefined,
+      () => undefined,
+    );
+
+    return transaction;
+  }
+
   async tryRead(file) {
     try {
       const raw = await readFile(file, "utf8");
@@ -62,6 +79,7 @@ export class InMemoryStateRepository {
   constructor(initialState, clone = structuredClone) {
     this.clone = clone;
     this.state = clone(initialState);
+    this.transactionTail = Promise.resolve();
   }
 
   async load() {
@@ -70,5 +88,21 @@ export class InMemoryStateRepository {
 
   async save(state) {
     this.state = this.clone(state);
+  }
+
+  transact(work) {
+    const transaction = this.transactionTail.then(async () => {
+      const state = await this.load();
+      const result = await work(state);
+      await this.save(state);
+      return result;
+    });
+
+    this.transactionTail = transaction.then(
+      () => undefined,
+      () => undefined,
+    );
+
+    return transaction;
   }
 }
