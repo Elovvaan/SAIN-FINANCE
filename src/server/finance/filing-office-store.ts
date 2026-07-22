@@ -8,6 +8,7 @@ import { JsonFileStateRepository } from "./filing-office-repository.js";
 export interface FilingOfficeStateRepository {
   load(): Promise<FilingState>;
   save(state: FilingState): Promise<void>;
+  transact<Result>(work: (state: FilingState) => Promise<Result> | Result): Promise<Result>;
 }
 
 let repository: FilingOfficeStateRepository | undefined;
