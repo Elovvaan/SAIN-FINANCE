@@ -3,7 +3,7 @@ import { PostgresDatabase } from "../finance/postgres-database";
 
 const SESSION_TTL_SECONDS = 60 * 60 * 8;
 const PASSWORD_KEY_LENGTH = 64;
-const SCRYPT_PARAMETERS = { N: 16_384, r: 8, p: 1 } as const;
+const SCRYPT_PARAMETERS = { N: 16_384, r: 8, p: 1 };
 
 export type AuthenticatedOperator = {
   sessionId: string;
