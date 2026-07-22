@@ -4,7 +4,6 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "prebuild": "node scripts/ensure-build-dependencies.mjs",
     "build": "next build",
     "migrate": "node scripts/migrate.mjs",
     "start": "npm run migrate && next start -H 0.0.0.0",
