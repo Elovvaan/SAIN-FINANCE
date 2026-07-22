@@ -6,22 +6,44 @@ function validateState(value) {
   if (!value || typeof value !== "object" || value.schemaVersion !== 1) {
     throw new Error("INVALID_STATE");
   }
+  if (!Array.isArray(value.audit)) throw new Error("INVALID_AUDIT");
   return structuredClone(value);
 }
 
+function createAuditEvent(id, operation = "TEST_OPERATION") {
+  return {
+    id,
+    actorId: "actor-1",
+    operation,
+    targetId: "target-1",
+    at: "2026-07-22T12:00:00.000Z",
+    previousState: "OLD",
+    resultingState: "NEW",
+  };
+}
+
 class FakeDatabase {
-  constructor(initialRow) {
+  constructor(initialRow, initialAudit = []) {
     this.row = initialRow ? structuredClone(initialRow) : undefined;
+    this.audit = structuredClone(initialAudit);
     this.queue = Promise.resolve();
   }
 
   transaction(callback) {
     const run = this.queue.then(async () => {
-      const snapshot = this.row ? structuredClone(this.row) : undefined;
+      const rowSnapshot = this.row ? structuredClone(this.row) : undefined;
+      const auditSnapshot = structuredClone(this.audit);
       const client = {
         query: async (text, values = []) => {
           if (text.includes("SELECT state, revision")) {
             return { rows: this.row ? [structuredClone(this.row)] : [], rowCount: this.row ? 1 : 0 };
+          }
+
+          if (text.includes("SELECT event") && text.includes("filing_office_audit_events")) {
+            return {
+              rows: this.audit.map((event) => ({ event: structuredClone(event) })),
+              rowCount: this.audit.length,
+            };
           }
 
           if (text.includes("INSERT INTO filing_office_state")) {
@@ -45,6 +67,16 @@ class FakeDatabase {
             return { rows: [{ revision: this.row.revision }], rowCount: 1 };
           }
 
+          if (text.includes("INSERT INTO filing_office_audit_events")) {
+            if (this.audit.some((event) => event.id === values[1])) {
+              const error = new Error("duplicate audit event");
+              error.code = "23505";
+              throw error;
+            }
+            this.audit.push(JSON.parse(values[9]));
+            return { rows: [], rowCount: 1 };
+          }
+
           throw new Error(`UNEXPECTED_SQL: ${text}`);
         },
       };
@@ -52,7 +84,8 @@ class FakeDatabase {
       try {
         return await callback(client);
       } catch (error) {
-        this.row = snapshot;
+        this.row = rowSnapshot;
+        this.audit = auditSnapshot;
         throw error;
       }
     });
@@ -66,10 +99,14 @@ function createRepository(database, allowInitialState = false) {
   return new DatabaseStateRepository({
     database,
     validate: validateState,
-    createInitialState: () => ({ schemaVersion: 1, items: [] }),
+    createInitialState: () => ({ schemaVersion: 1, items: [], audit: [] }),
     allowInitialState,
     institutionKey: "test-institution",
   });
+}
+
+function createStoredState(items = []) {
+  return { schemaVersion: 1, items, audit: [] };
 }
 
 test("database repository fails closed when no row exists", async () => {
@@ -88,13 +125,15 @@ test("database repository initializes state inside a transaction", async () => {
   assert.deepEqual(await repository.load(), {
     schemaVersion: 1,
     items: ["created"],
+    audit: [],
   });
   assert.equal(database.row.revision, 1);
+  assert.deepEqual(database.row.state.audit, []);
 });
 
 test("database repository serializes concurrent transactions without lost updates", async () => {
   const database = new FakeDatabase({
-    state: { schemaVersion: 1, items: [] },
+    state: createStoredState(),
     revision: 4,
   });
   const repository = createRepository(database);
@@ -113,17 +152,61 @@ test("database repository serializes concurrent transactions without lost update
   assert.equal(database.row.revision, 6);
 });
 
-test("database repository rolls back state when callback fails", async () => {
-  const database = new FakeDatabase({
-    state: { schemaVersion: 1, items: ["stable"] },
-    revision: 2,
+test("database repository stores appended audit events outside aggregate JSON", async () => {
+  const existing = createAuditEvent("00000000-0000-4000-8000-000000000001", "EXISTING");
+  const appended = createAuditEvent("00000000-0000-4000-8000-000000000002", "APPENDED");
+  const database = new FakeDatabase(
+    { state: createStoredState(), revision: 2 },
+    [existing],
+  );
+  const repository = createRepository(database);
+
+  await repository.transact((state) => {
+    state.audit.push(appended);
   });
+
+  assert.deepEqual((await repository.load()).audit, [existing, appended]);
+  assert.deepEqual(database.row.state.audit, []);
+  assert.deepEqual(database.audit, [existing, appended]);
+});
+
+test("database repository rejects deletion or rewriting of audit history", async () => {
+  const existing = createAuditEvent("00000000-0000-4000-8000-000000000001", "EXISTING");
+  const database = new FakeDatabase(
+    { state: createStoredState(), revision: 2 },
+    [existing],
+  );
+  const repository = createRepository(database);
+
+  await assert.rejects(
+    () => repository.transact((state) => state.audit.splice(0, 1)),
+    /AUDIT_HISTORY_IMMUTABLE/,
+  );
+
+  await assert.rejects(
+    () => repository.transact((state) => {
+      state.audit[0].operation = "REWRITTEN";
+    }),
+    /AUDIT_HISTORY_IMMUTABLE/,
+  );
+
+  assert.deepEqual(database.audit, [existing]);
+  assert.equal(database.row.revision, 2);
+});
+
+test("database repository rolls back aggregate and audit when callback fails", async () => {
+  const existing = createAuditEvent("00000000-0000-4000-8000-000000000001", "EXISTING");
+  const database = new FakeDatabase(
+    { state: createStoredState(["stable"]), revision: 2 },
+    [existing],
+  );
   const repository = createRepository(database);
 
   await assert.rejects(
     () =>
       repository.transact((state) => {
         state.items.push("partial");
+        state.audit.push(createAuditEvent("00000000-0000-4000-8000-000000000002"));
         throw new Error("FAILED_OPERATION");
       }),
     /FAILED_OPERATION/,
@@ -132,13 +215,15 @@ test("database repository rolls back state when callback fails", async () => {
   assert.deepEqual(await repository.load(), {
     schemaVersion: 1,
     items: ["stable"],
+    audit: [existing],
   });
   assert.equal(database.row.revision, 2);
+  assert.deepEqual(database.audit, [existing]);
 });
 
 test("database repository detects optimistic write conflicts", async () => {
   const database = new FakeDatabase({
-    state: { schemaVersion: 1, items: [] },
+    state: createStoredState(),
     revision: 3,
   });
   const repository = createRepository(database);
