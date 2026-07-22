@@ -37,7 +37,8 @@ export async function POST(request: NextRequest) {
 
     const result = await runFilingOfficeOperation({
       ...body,
-      actorId: session.userId,
+      actorId: session.email,
+      userId: session.userId,
       sessionId: session.sessionId,
       permissions: session.permissions,
     });
