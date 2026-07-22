@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOperator } from "@/server/auth/operator-session";
-import { getFilingOfficeSnapshot } from "@/server/finance/filing-office";
+import { getFilingOfficeSnapshot } from "@/server/finance/filing-office-service";
 
 export const runtime = "nodejs";
 
