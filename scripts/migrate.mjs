@@ -22,6 +22,13 @@ function checksum(content) {
   return createHash("sha256").update(content).digest("hex");
 }
 
+function migrationBody(content) {
+  return content
+    .replace(/^\s*BEGIN\s*;\s*/i, "")
+    .replace(/\s*COMMIT\s*;\s*$/i, "")
+    .trim();
+}
+
 async function ensureHistory(client) {
   await client.query(`
     CREATE TABLE IF NOT EXISTS sain_schema_migrations (
@@ -43,8 +50,8 @@ async function migrate() {
       .sort((left, right) => left.localeCompare(right));
 
     for (const file of files) {
-      const sql = await readFile(path.join(migrationsDirectory, file), "utf8");
-      const currentChecksum = checksum(sql);
+      const fileContent = await readFile(path.join(migrationsDirectory, file), "utf8");
+      const currentChecksum = checksum(fileContent);
       const existing = await client.query(
         "SELECT checksum FROM sain_schema_migrations WHERE migration_name = $1",
         [file],
@@ -59,7 +66,7 @@ async function migrate() {
 
       await client.query("BEGIN");
       try {
-        await client.query(sql);
+        await client.query(migrationBody(fileContent));
         await client.query(
           "INSERT INTO sain_schema_migrations (migration_name, checksum) VALUES ($1, $2)",
           [file, currentChecksum],
