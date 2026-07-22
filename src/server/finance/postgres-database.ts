@@ -1,4 +1,4 @@
-import { Pool, type PoolClient, type QueryResultRow } from "pg";
+import { Pool, type PoolClient } from "pg";
 import type {
   SqlDatabase,
   SqlQueryResult,
@@ -29,12 +29,12 @@ function getPool() {
 class PostgresTransactionClient implements SqlTransactionClient {
   constructor(private readonly client: PoolClient) {}
 
-  async query<Row extends QueryResultRow = QueryResultRow>(
+  async query<Row = Record<string, unknown>>(
     text: string,
     values: readonly unknown[] = [],
   ): Promise<SqlQueryResult<Row>> {
-    const result = await this.client.query<Row>(text, [...values]);
-    return { rows: result.rows, rowCount: result.rowCount };
+    const result = await this.client.query(text, [...values]);
+    return { rows: result.rows as Row[], rowCount: result.rowCount };
   }
 }
 
