@@ -22,8 +22,26 @@ function checksum(content) {
   return createHash("sha256").update(content).digest("hex");
 }
 
-function migrationBody(content) {
+function normalizeMigrationSql(file, content) {
+  if (file !== "012_create_filing_operation_support_tables.sql") return content;
+
   return content
+    .replace(
+      "submission_row.institution_key || ':' || submission_row.submission_id || ':' || manifest_item.item ->> 'documentId' || ':' || COALESCE(manifest_item.item ->> 'version', '1')",
+      "submission_row.institution_key || ':' || submission_row.submission_id || ':' || (manifest_item.item ->> 'documentId') || ':' || COALESCE((manifest_item.item ->> 'version'), '1')",
+    )
+    .replace(
+      "document_row.document_id = manifest_item.item ->> 'documentId'",
+      "document_row.document_id = (manifest_item.item ->> 'documentId')",
+    )
+    .replace(
+      "NULLIF(manifest_item.item ->> 'checksum', '')",
+      "NULLIF((manifest_item.item ->> 'checksum'), '')",
+    );
+}
+
+function migrationBody(file, content) {
+  return normalizeMigrationSql(file, content)
     .replace(/^\s*BEGIN\s*;\s*/i, "")
     .replace(/\s*COMMIT\s*;\s*$/i, "")
     .trim();
@@ -66,7 +84,7 @@ async function migrate() {
 
       await client.query("BEGIN");
       try {
-        await client.query(migrationBody(fileContent));
+        await client.query(migrationBody(file, fileContent));
         await client.query(
           "INSERT INTO sain_schema_migrations (migration_name, checksum) VALUES ($1, $2)",
           [file, currentChecksum],
