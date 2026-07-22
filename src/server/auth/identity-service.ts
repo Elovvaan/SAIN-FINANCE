@@ -1,8 +1,6 @@
-import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
-import { promisify } from "node:util";
+import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSafeEqual, type ScryptOptions } from "node:crypto";
 import { PostgresDatabase } from "../finance/postgres-database";
 
-const scrypt = promisify(scryptCallback);
 const SESSION_TTL_SECONDS = 60 * 60 * 8;
 const PASSWORD_KEY_LENGTH = 64;
 const SCRYPT_PARAMETERS = { N: 16_384, r: 8, p: 1 } as const;
@@ -57,15 +55,25 @@ function equalText(left: string, right: string) {
   return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
 }
 
+function scrypt(password: string, salt: string, keyLength: number, options: ScryptOptions): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scryptCallback(password, salt, keyLength, options, (error, derivedKey) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve(derivedKey);
+    });
+  });
+}
+
 async function derivePassword(password: string, salt: string, parameters = SCRYPT_PARAMETERS) {
-  return Buffer.from(
-    await scrypt(password, salt, PASSWORD_KEY_LENGTH, {
-      N: parameters.N,
-      r: parameters.r,
-      p: parameters.p,
-      maxmem: 64 * 1024 * 1024,
-    }),
-  );
+  return scrypt(password, salt, PASSWORD_KEY_LENGTH, {
+    N: parameters.N,
+    r: parameters.r,
+    p: parameters.p,
+    maxmem: 64 * 1024 * 1024,
+  });
 }
 
 async function createPasswordRecord(password: string) {
