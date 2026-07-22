@@ -24,24 +24,55 @@ function createVersion(version, content = `content-${version}`, frozen = false) 
 }
 
 function createDocument(id = "document-1", versions = []) {
-  return { id, title: "Test Document", versions };
+  return {
+    id,
+    ownerType: "INSTITUTION",
+    ownerId: "institution-1",
+    packageId: "package-1",
+    type: "OC10",
+    title: "Test Document",
+    status: "GENERATED",
+    templateClass: "SAIN_INTERNAL_TEMPLATE",
+    sourceVerificationRequired: false,
+    versions,
+  };
+}
+
+function metadata(document) {
+  const { versions: _versions, ...documentData } = document;
+  return documentData;
 }
 
 class FakeDatabase {
-  constructor(initialRow, initialAudit = [], initialVersions = []) {
+  constructor(initialRow, initialAudit = [], initialDocuments = [], initialVersions = []) {
     this.row = initialRow ? structuredClone(initialRow) : undefined;
     this.audit = structuredClone(initialAudit);
+    this.documents = initialDocuments.map((document) => metadata(structuredClone(document)));
     this.versions = structuredClone(initialVersions);
     this.queue = Promise.resolve();
   }
 
   transaction(callback) {
     const run = this.queue.then(async () => {
-      const snapshots = structuredClone({ row: this.row, audit: this.audit, versions: this.versions });
+      const snapshots = structuredClone({
+        row: this.row,
+        audit: this.audit,
+        documents: this.documents,
+        versions: this.versions,
+      });
       const client = {
         query: async (text, values = []) => {
           if (text.includes("SELECT state, revision")) {
             return { rows: this.row ? [structuredClone(this.row)] : [], rowCount: this.row ? 1 : 0 };
+          }
+          if (text.includes("SELECT document_id, document_data")) {
+            return {
+              rows: this.documents.map((document) => ({
+                document_id: document.id,
+                document_data: structuredClone(document),
+              })),
+              rowCount: this.documents.length,
+            };
           }
           if (text.includes("SELECT event") && text.includes("filing_office_audit_events")) {
             return { rows: this.audit.map((event) => ({ event: structuredClone(event) })), rowCount: this.audit.length };
@@ -65,6 +96,17 @@ class FakeDatabase {
             this.row = { state: JSON.parse(values[1]), revision: this.row.revision + 1 };
             return { rows: [{ revision: this.row.revision }], rowCount: 1 };
           }
+          if (text.includes("INSERT INTO filing_office_documents")) {
+            if (this.documents.some((document) => document.id === values[1])) throw uniqueError("duplicate document");
+            this.documents.push(JSON.parse(values[12]));
+            return { rows: [], rowCount: 1 };
+          }
+          if (text.includes("UPDATE filing_office_documents")) {
+            const index = this.documents.findIndex((document) => document.id === values[1]);
+            if (index < 0) return { rows: [], rowCount: 0 };
+            this.documents[index] = JSON.parse(values[12]);
+            return { rows: [], rowCount: 1 };
+          }
           if (text.includes("INSERT INTO filing_office_audit_events")) {
             if (this.audit.some((event) => event.id === values[1])) throw uniqueError("duplicate audit");
             this.audit.push(JSON.parse(values[9]));
@@ -86,6 +128,7 @@ class FakeDatabase {
       } catch (error) {
         this.row = snapshots.row;
         this.audit = snapshots.audit;
+        this.documents = snapshots.documents;
         this.versions = snapshots.versions;
         throw error;
       }
@@ -111,13 +154,8 @@ function createRepository(database, allowInitialState = false) {
   });
 }
 
-function createStoredState(items = [], documents = []) {
-  return {
-    schemaVersion: 1,
-    items,
-    audit: [],
-    documents: documents.map((document) => ({ ...document, versions: [] })),
-  };
+function createStoredState(items = []) {
+  return { schemaVersion: 1, items, audit: [], documents: [] };
 }
 
 test("database repository fails closed when no row exists", async () => {
@@ -143,34 +181,78 @@ test("database repository serializes concurrent transactions without lost update
   assert.equal(database.row.revision, 6);
 });
 
-test("database repository stores audit and document versions outside aggregate JSON", async () => {
-  const existingAudit = createAuditEvent("audit-1", "EXISTING");
+test("database repository stores documents, versions, and audit outside aggregate JSON", async () => {
   const version1 = createVersion(1);
   const database = new FakeDatabase(
-    { state: createStoredState([], [createDocument()]), revision: 2 },
-    [existingAudit],
+    { state: createStoredState(), revision: 2 },
+    [createAuditEvent("audit-1", "EXISTING")],
+    [createDocument("document-1")],
     [{ documentId: "document-1", version: version1 }],
   );
   const repository = createRepository(database);
   const version2 = createVersion(2);
+
   await repository.transact((state) => {
     state.audit.push(createAuditEvent("audit-2", "APPENDED"));
+    state.documents[0].status = "SIGNED";
+    state.documents[0].signedBy = "actor-1";
     state.documents[0].versions.push(version2);
   });
 
   const loaded = await repository.load();
+  assert.equal(loaded.documents[0].status, "SIGNED");
+  assert.equal(loaded.documents[0].signedBy, "actor-1");
   assert.deepEqual(loaded.documents[0].versions, [version1, version2]);
   assert.equal(loaded.audit.length, 2);
   assert.deepEqual(database.row.state.audit, []);
-  assert.deepEqual(database.row.state.documents[0].versions, []);
+  assert.deepEqual(database.row.state.documents, []);
+  assert.equal(database.documents.length, 1);
   assert.equal(database.versions.length, 2);
+});
+
+test("database repository inserts newly generated documents", async () => {
+  const database = new FakeDatabase({ state: createStoredState(), revision: 1 });
+  const repository = createRepository(database);
+  const document = createDocument("document-2", [createVersion(1)]);
+
+  await repository.transact((state) => state.documents.push(document));
+
+  assert.deepEqual(await repository.load(), {
+    schemaVersion: 1,
+    items: [],
+    audit: [],
+    documents: [document],
+  });
+  assert.equal(database.documents.length, 1);
+  assert.equal(database.versions.length, 1);
+});
+
+test("database repository rejects document deletion and duplicate document IDs", async () => {
+  const database = new FakeDatabase(
+    { state: createStoredState(), revision: 2 },
+    [],
+    [createDocument()],
+  );
+  const repository = createRepository(database);
+
+  await assert.rejects(
+    () => repository.transact((state) => state.documents.splice(0, 1)),
+    /DOCUMENT_DELETION_NOT_SUPPORTED/,
+  );
+  await assert.rejects(
+    () => repository.transact((state) => state.documents.push(createDocument())),
+    /DOCUMENT_ID_CONFLICT/,
+  );
+  assert.equal(database.documents.length, 1);
+  assert.equal(database.row.revision, 2);
 });
 
 test("database repository rejects rewriting or deleting document version history", async () => {
   const version1 = createVersion(1, "original");
   const database = new FakeDatabase(
-    { state: createStoredState([], [createDocument()]), revision: 2 },
+    { state: createStoredState(), revision: 2 },
     [],
+    [createDocument()],
     [{ documentId: "document-1", version: version1 }],
   );
   const repository = createRepository(database);
@@ -190,8 +272,9 @@ test("database repository rejects rewriting or deleting document version history
 test("database repository enforces sequential document version numbers", async () => {
   const version1 = createVersion(1);
   const database = new FakeDatabase(
-    { state: createStoredState([], [createDocument()]), revision: 2 },
+    { state: createStoredState(), revision: 2 },
     [],
+    [createDocument()],
     [{ documentId: "document-1", version: version1 }],
   );
   const repository = createRepository(database);
@@ -201,24 +284,28 @@ test("database repository enforces sequential document version numbers", async (
   );
 });
 
-test("database repository rolls back aggregate, audit, and versions together", async () => {
+test("database repository rolls back aggregate, documents, audit, and versions together", async () => {
   const version1 = createVersion(1);
   const database = new FakeDatabase(
-    { state: createStoredState(["stable"], [createDocument()]), revision: 2 },
+    { state: createStoredState(["stable"]), revision: 2 },
     [createAuditEvent("audit-1")],
+    [createDocument()],
     [{ documentId: "document-1", version: version1 }],
   );
   const repository = createRepository(database);
   await assert.rejects(
     () => repository.transact((state) => {
       state.items.push("partial");
+      state.documents[0].status = "SIGNED";
       state.audit.push(createAuditEvent("audit-2"));
       state.documents[0].versions.push(createVersion(2));
       throw new Error("FAILED_OPERATION");
     }),
     /FAILED_OPERATION/,
   );
-  assert.deepEqual((await repository.load()).items, ["stable"]);
+  const loaded = await repository.load();
+  assert.deepEqual(loaded.items, ["stable"]);
+  assert.equal(loaded.documents[0].status, "GENERATED");
   assert.equal(database.audit.length, 1);
   assert.equal(database.versions.length, 1);
   assert.equal(database.row.revision, 2);
