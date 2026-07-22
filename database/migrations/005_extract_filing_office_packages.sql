@@ -14,7 +14,6 @@ CREATE TABLE IF NOT EXISTS filing_office_packages (
   created_at timestamptz NOT NULL DEFAULT NOW(),
   updated_at timestamptz NOT NULL DEFAULT NOW(),
   PRIMARY KEY (institution_key, package_id),
-  UNIQUE (institution_key, package_order),
   CONSTRAINT filing_office_packages_owner_type_check
     CHECK (owner_type IN ('INSTITUTION', 'RELATIONSHIP')),
   CONSTRAINT filing_office_packages_status_check
@@ -33,6 +32,9 @@ CREATE TABLE IF NOT EXISTS filing_office_packages (
   CONSTRAINT filing_office_packages_completion_check
     CHECK (completion_percentage >= 0 AND completion_percentage <= 100)
 );
+
+CREATE INDEX IF NOT EXISTS filing_office_packages_order_idx
+  ON filing_office_packages (institution_key, package_order, package_id);
 
 CREATE INDEX IF NOT EXISTS filing_office_packages_owner_idx
   ON filing_office_packages (institution_key, owner_type, owner_id);
