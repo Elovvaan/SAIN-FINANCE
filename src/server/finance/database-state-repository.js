@@ -389,11 +389,10 @@ function reconcileDocuments(existingDocuments, nextDocuments) {
     if (JSON.stringify(withoutVersions(existing)) !== JSON.stringify(withoutVersions(next))) {
       updated.push(next);
     }
-    existingById.delete(existing.id);
   }
 
   for (const document of nextDocuments) {
-    if (existingById.has(document.id)) inserted.push(document);
+    if (!existingById.has(document.id)) inserted.push(document);
   }
 
   return { inserted, updated };
