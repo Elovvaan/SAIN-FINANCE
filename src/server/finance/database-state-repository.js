@@ -6,6 +6,7 @@ const SELECT_DOCUMENT_VERSIONS = `SELECT document_id, version_data FROM filing_o
 const SELECT_PACKAGES = `SELECT package_id, package_order, package_data FROM filing_office_packages WHERE institution_key = $1 ORDER BY package_order ASC`;
 const SELECT_COLLATERAL = `SELECT collateral_id, collateral_order, collateral_data FROM filing_office_collateral WHERE institution_key = $1 ORDER BY collateral_order ASC`;
 const SELECT_SUBMISSIONS = `SELECT submission_id, submission_order, submission_data FROM filing_office_submissions WHERE institution_key = $1 ORDER BY submission_order ASC`;
+const SELECT_AUTHORITIES = `SELECT authority_id, authority_order, authority_data FROM filing_office_authorities WHERE institution_key = $1 ORDER BY authority_order ASC`;
 
 const INSERT_STATE = `
   INSERT INTO filing_office_state (institution_key, state, revision, created_at, updated_at)
@@ -78,6 +79,19 @@ const UPDATE_SUBMISSION = `
     updated_at=NOW()
   WHERE institution_key=$1 AND submission_id=$2
 `;
+const INSERT_AUTHORITY = `
+  INSERT INTO filing_office_authorities (
+    institution_key, authority_id, authority_order, actor_id, scope,
+    status, effective_at, expires_at, authority_data, created_at, updated_at
+  ) VALUES ($1,$2,$3,$4,$5,$6,$7::timestamptz,$8::timestamptz,$9::jsonb,NOW(),NOW())
+`;
+const UPDATE_AUTHORITY = `
+  UPDATE filing_office_authorities SET
+    authority_order=$3, actor_id=$4, scope=$5, status=$6,
+    effective_at=$7::timestamptz, expires_at=$8::timestamptz,
+    authority_data=$9::jsonb, updated_at=NOW()
+  WHERE institution_key=$1 AND authority_id=$2
+`;
 const INSERT_AUDIT_EVENT = `
   INSERT INTO filing_office_audit_events (
     institution_key, event_id, actor_id, operation, target_id, occurred_at,
@@ -115,25 +129,19 @@ export class DatabaseStateRepository {
       const validated = this.validate(state);
       if (!current) {
         await this.insertState(client, validated);
-        await this.insertDocuments(client, indexed(validated.documents));
-        await this.insertPackages(client, indexed(validated.packages));
-        await this.insertCollateral(client, indexed(validated.collateral));
-        await this.insertSubmissions(client, indexed(validated.submissions));
+        await this.insertInitialCollections(client, validated);
         await this.insertAuditEvents(client, validated.audit);
         await this.insertDocumentVersions(client, flattenDocumentVersions(validated.documents));
         return;
       }
 
       const persisted = await this.readHydratedState(client, current.state);
-      const documentChanges = reconcileCollection(persisted.documents, validated.documents, "DOCUMENT", withoutVersions);
-      const packageChanges = reconcileCollection(persisted.packages, validated.packages, "PACKAGE", identity);
-      const collateralChanges = reconcileCollection(persisted.collateral, validated.collateral, "COLLATERAL", identity);
-      const submissionChanges = reconcileCollection(persisted.submissions, validated.submissions, "SUBMISSION", identity);
+      const changes = reconcileMutableCollections(persisted, validated);
       const appendedAudit = assertAppendOnlyAudit(persisted.audit, validated.audit);
       const appendedVersions = assertAppendOnlyDocumentVersions(persisted.documents, validated.documents);
 
       await this.updateState(client, validated, current.revision);
-      await this.persistMutableCollections(client, documentChanges, packageChanges, collateralChanges, submissionChanges);
+      await this.persistMutableCollections(client, changes);
       await this.insertAuditEvents(client, appendedAudit);
       await this.insertDocumentVersions(client, appendedVersions);
     });
@@ -143,52 +151,52 @@ export class DatabaseStateRepository {
     return this.database.transaction(async (client) => {
       const current = await this.readRow(client, true);
       let state;
-      let existingAudit = [];
-      let existingDocuments = [];
-      let existingPackages = [];
-      let existingCollateral = [];
-      let existingSubmissions = [];
+      let persisted;
 
       if (current) {
         state = await this.readHydratedState(client, current.state);
-        existingAudit = structuredClone(state.audit);
-        existingDocuments = structuredClone(state.documents);
-        existingPackages = structuredClone(state.packages);
-        existingCollateral = structuredClone(state.collateral);
-        existingSubmissions = structuredClone(state.submissions);
+        persisted = structuredClone(state);
       } else if (this.allowInitialState) {
         state = this.createInitialState();
+        persisted = emptyCollections();
       } else {
         throw new Error("STATE_STORE_UNAVAILABLE: database state not initialized");
       }
 
       const result = await callback(state);
       const validated = this.validate(state);
-      const documentChanges = reconcileCollection(existingDocuments, validated.documents, "DOCUMENT", withoutVersions);
-      const packageChanges = reconcileCollection(existingPackages, validated.packages, "PACKAGE", identity);
-      const collateralChanges = reconcileCollection(existingCollateral, validated.collateral, "COLLATERAL", identity);
-      const submissionChanges = reconcileCollection(existingSubmissions, validated.submissions, "SUBMISSION", identity);
-      const appendedAudit = assertAppendOnlyAudit(existingAudit, validated.audit);
-      const appendedVersions = assertAppendOnlyDocumentVersions(existingDocuments, validated.documents);
+      const changes = reconcileMutableCollections(persisted, validated);
+      const appendedAudit = assertAppendOnlyAudit(persisted.audit, validated.audit);
+      const appendedVersions = assertAppendOnlyDocumentVersions(persisted.documents, validated.documents);
 
       if (current) await this.updateState(client, validated, current.revision);
       else await this.insertState(client, validated);
-      await this.persistMutableCollections(client, documentChanges, packageChanges, collateralChanges, submissionChanges);
+      await this.persistMutableCollections(client, changes);
       await this.insertAuditEvents(client, appendedAudit);
       await this.insertDocumentVersions(client, appendedVersions);
       return result;
     });
   }
 
-  async persistMutableCollections(client, documents, packages, collateral, submissions) {
-    await this.insertDocuments(client, documents.inserted);
-    await this.updateDocuments(client, documents.updated);
-    await this.insertPackages(client, packages.inserted);
-    await this.updatePackages(client, packages.updated);
-    await this.insertCollateral(client, collateral.inserted);
-    await this.updateCollateral(client, collateral.updated);
-    await this.insertSubmissions(client, submissions.inserted);
-    await this.updateSubmissions(client, submissions.updated);
+  async insertInitialCollections(client, state) {
+    await this.insertDocuments(client, indexed(state.documents));
+    await this.insertPackages(client, indexed(state.packages));
+    await this.insertCollateral(client, indexed(state.collateral));
+    await this.insertSubmissions(client, indexed(state.submissions));
+    await this.insertAuthorities(client, indexed(state.authorities));
+  }
+
+  async persistMutableCollections(client, changes) {
+    await this.insertDocuments(client, changes.documents.inserted);
+    await this.updateDocuments(client, changes.documents.updated);
+    await this.insertPackages(client, changes.packages.inserted);
+    await this.updatePackages(client, changes.packages.updated);
+    await this.insertCollateral(client, changes.collateral.inserted);
+    await this.updateCollateral(client, changes.collateral.updated);
+    await this.insertSubmissions(client, changes.submissions.inserted);
+    await this.updateSubmissions(client, changes.submissions.updated);
+    await this.insertAuthorities(client, changes.authorities.inserted);
+    await this.updateAuthorities(client, changes.authorities.updated);
   }
 
   async readRow(client, forUpdate) {
@@ -197,11 +205,12 @@ export class DatabaseStateRepository {
   }
 
   async readHydratedState(client, storedState) {
-    const [documentResult, packageResult, collateralResult, submissionResult, auditResult, versionResult] = await Promise.all([
+    const [documentResult, packageResult, collateralResult, submissionResult, authorityResult, auditResult, versionResult] = await Promise.all([
       client.query(SELECT_DOCUMENTS, [this.institutionKey]),
       client.query(SELECT_PACKAGES, [this.institutionKey]),
       client.query(SELECT_COLLATERAL, [this.institutionKey]),
       client.query(SELECT_SUBMISSIONS, [this.institutionKey]),
+      client.query(SELECT_AUTHORITIES, [this.institutionKey]),
       client.query(SELECT_AUDIT, [this.institutionKey]),
       client.query(SELECT_DOCUMENT_VERSIONS, [this.institutionKey]),
     ]);
@@ -220,6 +229,7 @@ export class DatabaseStateRepository {
       packages: packageResult.rows.map((row) => row.package_data),
       collateral: collateralResult.rows.map((row) => row.collateral_data),
       submissions: submissionResult.rows.map((row) => row.submission_data),
+      authorities: authorityResult.rows.map((row) => row.authority_data),
       audit: auditResult.rows.map((row) => row.event),
     });
   }
@@ -246,6 +256,8 @@ export class DatabaseStateRepository {
   async updateCollateral(client, entries) { await this.updateRows(client, entries, UPDATE_COLLATERAL, collateralValues, "COLLATERAL_WRITE_CONFLICT"); }
   async insertSubmissions(client, entries) { await this.insertRows(client, entries, INSERT_SUBMISSION, submissionValues, "SUBMISSION_CONFLICT"); }
   async updateSubmissions(client, entries) { await this.updateRows(client, entries, UPDATE_SUBMISSION, submissionValues, "SUBMISSION_WRITE_CONFLICT"); }
+  async insertAuthorities(client, entries) { await this.insertRows(client, entries, INSERT_AUTHORITY, authorityValues, "AUTHORITY_CONFLICT"); }
+  async updateAuthorities(client, entries) { await this.updateRows(client, entries, UPDATE_AUTHORITY, authorityValues, "AUTHORITY_WRITE_CONFLICT"); }
 
   async insertRows(client, entries, sql, valuesFactory, conflictCode) {
     for (const entry of entries) {
@@ -296,8 +308,12 @@ export class DatabaseStateRepository {
   }
 }
 
+function emptyCollections() {
+  return { audit: [], documents: [], packages: [], collateral: [], submissions: [], authorities: [] };
+}
+
 function withoutNormalizedCollections(state) {
-  return { ...state, audit: [], documents: [], packages: [], collateral: [], submissions: [] };
+  return { ...state, ...emptyCollections() };
 }
 
 function indexed(items) {
@@ -341,12 +357,30 @@ function submissionValues(institutionKey, { item: submission, index }) {
   ];
 }
 
+function authorityValues(institutionKey, { item: authority, index }) {
+  return [
+    institutionKey, authority.id, index, authority.actorId, authority.scope,
+    authority.status, authority.effectiveAt, authority.expiresAt ?? null,
+    JSON.stringify(authority),
+  ];
+}
+
 function withoutVersions(document) {
   const { versions: _versions, ...metadata } = document;
   return metadata;
 }
 
 function identity(value) { return value; }
+
+function reconcileMutableCollections(existing, next) {
+  return {
+    documents: reconcileCollection(existing.documents, next.documents, "DOCUMENT", withoutVersions),
+    packages: reconcileCollection(existing.packages, next.packages, "PACKAGE", identity),
+    collateral: reconcileCollection(existing.collateral, next.collateral, "COLLATERAL", identity),
+    submissions: reconcileCollection(existing.submissions, next.submissions, "SUBMISSION", identity),
+    authorities: reconcileCollection(existing.authorities, next.authorities, "AUTHORITY", identity),
+  };
+}
 
 function flattenDocumentVersions(documents) {
   return documents.flatMap((document) => document.versions.map((version) => ({ documentId: document.id, version })));
