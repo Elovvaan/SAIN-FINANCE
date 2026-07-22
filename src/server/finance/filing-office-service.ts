@@ -39,23 +39,21 @@ export async function getFilingOfficeSnapshot(memberView = false) {
 }
 
 export async function runFilingOfficeOperation(input: Record<string, unknown>) {
-  const repository = getFilingOfficeRepository();
-  const state = await repository.load();
   const operation = String(input.operation || "");
   const actorId = String(input.actorId || "");
 
   if (!operation) throw new Error("MISSING_OPERATION");
   if (!actorId) throw new Error("MISSING_ACTOR");
 
-  const context = { state, operation, actorId, input };
-  const result =
-    handleAuthorityAndPackageOperation(context) ??
-    handleDocumentOperation(context) ??
-    handleCollateralOperation(context) ??
-    handleSubmissionOperation(context);
+  return getFilingOfficeRepository().transact((state) => {
+    const context = { state, operation, actorId, input };
+    const result =
+      handleAuthorityAndPackageOperation(context) ??
+      handleDocumentOperation(context) ??
+      handleCollateralOperation(context) ??
+      handleSubmissionOperation(context);
 
-  if (result === undefined) throw new Error("UNKNOWN_OPERATION");
-
-  await repository.save(state);
-  return result;
+    if (result === undefined) throw new Error("UNKNOWN_OPERATION");
+    return result;
+  });
 }
