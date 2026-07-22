@@ -3,6 +3,7 @@ BEGIN;
 CREATE TABLE IF NOT EXISTS filing_office_documents (
   institution_key text NOT NULL,
   document_id text NOT NULL,
+  document_order integer NOT NULL,
   owner_type text NOT NULL,
   owner_id text NOT NULL,
   package_id text,
@@ -17,6 +18,7 @@ CREATE TABLE IF NOT EXISTS filing_office_documents (
   created_at timestamptz NOT NULL DEFAULT NOW(),
   updated_at timestamptz NOT NULL DEFAULT NOW(),
   PRIMARY KEY (institution_key, document_id),
+  UNIQUE (institution_key, document_order),
   CONSTRAINT filing_office_documents_owner_type_check
     CHECK (owner_type IN ('INSTITUTION', 'RELATIONSHIP')),
   CONSTRAINT filing_office_documents_status_check
@@ -52,6 +54,7 @@ CREATE INDEX IF NOT EXISTS filing_office_documents_type_idx
 INSERT INTO filing_office_documents (
   institution_key,
   document_id,
+  document_order,
   owner_type,
   owner_id,
   package_id,
@@ -67,6 +70,7 @@ INSERT INTO filing_office_documents (
 SELECT
   state_row.institution_key,
   document ->> 'id',
+  document_position::integer - 1,
   document ->> 'ownerType',
   document ->> 'ownerId',
   NULLIF(document ->> 'packageId', ''),
@@ -81,7 +85,7 @@ SELECT
 FROM filing_office_state AS state_row
 CROSS JOIN LATERAL jsonb_array_elements(
   COALESCE(state_row.state -> 'documents', '[]'::jsonb)
-) AS document
+) WITH ORDINALITY AS extracted(document, document_position)
 ON CONFLICT (institution_key, document_id) DO NOTHING;
 
 UPDATE filing_office_state
