@@ -21,7 +21,7 @@ function operationErrorStatus(message: string) {
 
 export async function POST(request: NextRequest) {
   try {
-    const session = requireOperator(request);
+    const session = await requireOperator(request);
     const length = Number(request.headers.get("content-length") || 0);
     if (length > MAX_BODY_BYTES) {
       return NextResponse.json({ error: "PAYLOAD_TOO_LARGE" }, { status: 413 });
@@ -35,7 +35,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "MISSING_OPERATION" }, { status: 400 });
     }
 
-    const result = await runFilingOfficeOperation({ ...body, actorId: session.email });
+    const result = await runFilingOfficeOperation({
+      ...body,
+      actorId: session.userId,
+      sessionId: session.sessionId,
+      permissions: session.permissions,
+    });
     return NextResponse.json({ result });
   } catch (error) {
     const message = error instanceof Error ? error.message : "UNKNOWN_ERROR";
