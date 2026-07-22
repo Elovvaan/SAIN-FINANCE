@@ -3,7 +3,9 @@ import {
   createInitialFilingState,
   validateFilingState,
 } from "./filing-office-domain";
+import { DatabaseStateRepository } from "./database-state-repository.js";
 import { JsonFileStateRepository } from "./filing-office-repository.js";
+import { PostgresDatabase } from "./postgres-database";
 
 export interface FilingOfficeStateRepository {
   load(): Promise<FilingState>;
@@ -14,13 +16,19 @@ export interface FilingOfficeStateRepository {
 let repository: FilingOfficeStateRepository | undefined;
 
 function allowInitialState() {
-  if (process.env.SAIN_ALLOW_INITIAL_STATE === "true") return true;
-  return process.env.NODE_ENV !== "production";
+  return process.env.SAIN_ALLOW_INITIAL_STATE === "true";
 }
 
-export function getFilingOfficeRepository(): FilingOfficeStateRepository {
-  if (!repository) {
-    repository = new JsonFileStateRepository({
+function useJsonRepository() {
+  return process.env.SAIN_FILING_OFFICE_REPOSITORY === "json";
+}
+
+function createRepository(): FilingOfficeStateRepository {
+  if (useJsonRepository()) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("JSON_FILING_OFFICE_REPOSITORY_DISABLED_IN_PRODUCTION");
+    }
+    return new JsonFileStateRepository({
       fileName: "filing-office.json",
       backupFileName: "filing-office.backup.json",
       validate: validateFilingState,
@@ -28,6 +36,18 @@ export function getFilingOfficeRepository(): FilingOfficeStateRepository {
       allowInitialState: allowInitialState(),
     });
   }
+
+  return new DatabaseStateRepository({
+    database: new PostgresDatabase(),
+    validate: validateFilingState,
+    createInitialState: createInitialFilingState,
+    allowInitialState: allowInitialState(),
+    institutionKey: process.env.SAIN_INSTITUTION_KEY || "sain-finance",
+  });
+}
+
+export function getFilingOfficeRepository(): FilingOfficeStateRepository {
+  repository ??= createRepository();
   return repository;
 }
 
