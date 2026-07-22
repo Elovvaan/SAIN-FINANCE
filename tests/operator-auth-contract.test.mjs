@@ -26,9 +26,10 @@ test("credentials use scrypt and failed attempts create a timed lockout", () => 
   assert.match(identity, /INTERVAL '15 minutes'/);
 });
 
-test("institution operations require authentication and derive actor identity from the database session", () => {
+test("institution operations use the database session while preserving existing authority actor identity", () => {
   assert.match(operations, /await requireOperator\(request\)/);
-  assert.match(operations, /actorId:\s*session\.userId/);
+  assert.match(operations, /actorId:\s*session\.email/);
+  assert.match(operations, /userId:\s*session\.userId/);
   assert.match(operations, /sessionId:\s*session\.sessionId/);
 });
 
