@@ -2,6 +2,7 @@ import { createHash, randomBytes, randomUUID, scrypt as scryptCallback, timingSa
 import { PostgresDatabase } from "../finance/postgres-database";
 
 const SESSION_TTL_SECONDS = 60 * 60 * 8;
+const MFA_CHALLENGE_TTL_SECONDS = 5 * 60;
 const PASSWORD_KEY_LENGTH = 64;
 const SCRYPT_PARAMETERS = { N: 16_384, r: 8, p: 1 };
 
@@ -15,6 +16,13 @@ export type AuthenticatedOperator = {
   permissions: string[];
   issuedAt: number;
   expiresAt: number;
+};
+
+export type OperatorMfaChallenge = {
+  mfaRequired: true;
+  challengeToken: string;
+  challengeExpiresAt: number;
+  methodType: "TOTP";
 };
 
 type RequestMetadata = {
@@ -46,6 +54,11 @@ type SessionRow = {
   email: string;
   display_name: string | null;
   user_status: string;
+};
+
+type ActiveMfaRow = {
+  mfa_method_id: string;
+  method_type: "TOTP";
 };
 
 function institutionKey() {
@@ -217,6 +230,55 @@ async function loadRolesAndPermissions(client: { query: Function }, userId: stri
   };
 }
 
+async function createMfaChallenge(
+  client: { query: Function },
+  user: UserRow,
+  metadata: RequestMetadata,
+): Promise<OperatorMfaChallenge | null> {
+  const result = await client.query(
+    `SELECT mfa_method_id, method_type
+     FROM user_mfa_methods
+     WHERE institution_key = $1
+       AND user_id = $2
+       AND status = 'ACTIVE'
+       AND method_type = 'TOTP'
+     LIMIT 1
+     FOR UPDATE`,
+    [user.institution_key, user.user_id],
+  );
+
+  const method = result.rows[0] as ActiveMfaRow | undefined;
+  if (!method) return null;
+
+  const challengeToken = randomBytes(32).toString("base64url");
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const challengeExpiresAt = issuedAt + MFA_CHALLENGE_TTL_SECONDS;
+
+  await client.query(
+    `UPDATE user_mfa_methods
+     SET metadata = COALESCE(metadata, '{}'::jsonb) || $2::jsonb,
+         updated_at = NOW()
+     WHERE mfa_method_id = $1`,
+    [
+      method.mfa_method_id,
+      JSON.stringify({
+        loginChallengeHash: tokenHash(challengeToken),
+        loginChallengeIssuedAt: issuedAt,
+        loginChallengeExpiresAt: challengeExpiresAt,
+        loginChallengeSourceIp: metadata.sourceIp ?? null,
+        loginChallengeDeviceId: metadata.deviceId ?? null,
+      }),
+    ],
+  );
+
+  return {
+    mfaRequired: true,
+    challengeToken,
+    challengeExpiresAt,
+    methodType: method.method_type,
+  };
+}
+
 export async function authenticateOperator(emailInput: string, password: string, metadata: RequestMetadata = {}) {
   const email = normalizeEmail(emailInput);
   const database = new PostgresDatabase();
@@ -267,6 +329,12 @@ export async function authenticateOperator(emailInput: string, password: string,
     if (!authorization.roles.length) {
       await recordLoginEvent(client, { userId: user.user_id, email, outcome: "BLOCKED", reason: "NO_ACTIVE_ROLE", metadata });
       return null;
+    }
+
+    const mfaChallenge = await createMfaChallenge(client, user, metadata);
+    if (mfaChallenge) {
+      await recordLoginEvent(client, { userId: user.user_id, email, outcome: "BLOCKED", reason: "MFA_REQUIRED", metadata });
+      return mfaChallenge;
     }
 
     const token = randomBytes(32).toString("base64url");
