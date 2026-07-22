@@ -33,17 +33,37 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "INVALID_CREDENTIALS" }, { status: 401 });
     }
 
+    if ((authenticated as { mfaRequired?: boolean }).mfaRequired) {
+      const challenge = authenticated as {
+        mfaRequired: true;
+        challengeToken: string;
+        challengeExpiresAt: number;
+        methodType: "TOTP";
+      };
+      return NextResponse.json(
+        {
+          authenticated: false,
+          mfaRequired: true,
+          challengeToken: challenge.challengeToken,
+          challengeExpiresAt: challenge.challengeExpiresAt,
+          methodType: challenge.methodType,
+        },
+        { status: 202 },
+      );
+    }
+
+    const completed = authenticated as Exclude<typeof authenticated, { mfaRequired: true }>;
     const response = NextResponse.json({
       authenticated: true,
       user: {
-        id: authenticated.operator.userId,
-        email: authenticated.operator.email,
-        displayName: authenticated.operator.displayName,
-        roles: authenticated.operator.roles,
-        permissions: authenticated.operator.permissions,
+        id: completed.operator.userId,
+        email: completed.operator.email,
+        displayName: completed.operator.displayName,
+        roles: completed.operator.roles,
+        permissions: completed.operator.permissions,
       },
     });
-    response.cookies.set(OPERATOR_COOKIE, authenticated.token, operatorCookieOptions());
+    response.cookies.set(OPERATOR_COOKIE, completed.token, operatorCookieOptions());
     return response;
   } catch (error) {
     console.error("OPERATOR_LOGIN_FAILED", error);
