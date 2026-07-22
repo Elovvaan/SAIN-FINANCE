@@ -13,6 +13,13 @@ const SELECT_AUDIT = `
   ORDER BY occurred_at ASC, event_id ASC
 `;
 
+const SELECT_DOCUMENTS = `
+  SELECT document_id, document_data
+  FROM filing_office_documents
+  WHERE institution_key = $1
+  ORDER BY created_at ASC, document_id ASC
+`;
+
 const SELECT_DOCUMENT_VERSIONS = `
   SELECT document_id, version_data
   FROM filing_office_document_versions
@@ -39,6 +46,46 @@ const UPDATE_STATE = `
   WHERE institution_key = $1
     AND revision = $3
   RETURNING revision
+`;
+
+const INSERT_DOCUMENT = `
+  INSERT INTO filing_office_documents (
+    institution_key,
+    document_id,
+    owner_type,
+    owner_id,
+    package_id,
+    document_type,
+    title,
+    status,
+    template_class,
+    source_verification_required,
+    signed_by,
+    verified_by,
+    document_data,
+    created_at,
+    updated_at
+  ) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, NOW(), NOW()
+  )
+`;
+
+const UPDATE_DOCUMENT = `
+  UPDATE filing_office_documents
+  SET owner_type = $3,
+      owner_id = $4,
+      package_id = $5,
+      document_type = $6,
+      title = $7,
+      status = $8,
+      template_class = $9,
+      source_verification_required = $10,
+      signed_by = $11,
+      verified_by = $12,
+      document_data = $13::jsonb,
+      updated_at = NOW()
+  WHERE institution_key = $1
+    AND document_id = $2
 `;
 
 const INSERT_AUDIT_EVENT = `
@@ -77,9 +124,9 @@ const INSERT_DOCUMENT_VERSION = `
 /**
  * Transitional SQL repository for the Filing Office aggregate.
  *
- * Phase 2B stores audit history and document version history in normalized,
- * append-only tables. The public repository contract and FilingState domain
- * shape remain unchanged.
+ * Phase 2B stores document metadata, document version history, and audit
+ * history in normalized tables. The public repository contract and FilingState
+ * domain shape remain unchanged.
  */
 export class DatabaseStateRepository {
   constructor(options) {
@@ -106,18 +153,23 @@ export class DatabaseStateRepository {
 
       if (!current) {
         await this.insertState(client, validated);
+        await this.insertDocuments(client, validated.documents);
         await this.insertAuditEvents(client, validated.audit);
         await this.insertDocumentVersions(client, flattenDocumentVersions(validated.documents));
         return;
       }
 
       const persisted = await this.readHydratedState(client, current.state);
+      const documentChanges = reconcileDocuments(persisted.documents, validated.documents);
       const appendedAudit = assertAppendOnlyAudit(persisted.audit, validated.audit);
       const appendedVersions = assertAppendOnlyDocumentVersions(
         persisted.documents,
         validated.documents,
       );
+
       await this.updateState(client, validated, current.revision);
+      await this.insertDocuments(client, documentChanges.inserted);
+      await this.updateDocuments(client, documentChanges.updated);
       await this.insertAuditEvents(client, appendedAudit);
       await this.insertDocumentVersions(client, appendedVersions);
     });
@@ -142,6 +194,7 @@ export class DatabaseStateRepository {
 
       const result = await callback(state);
       const validated = this.validate(state);
+      const documentChanges = reconcileDocuments(existingDocuments, validated.documents);
       const appendedAudit = assertAppendOnlyAudit(existingAudit, validated.audit);
       const appendedVersions = assertAppendOnlyDocumentVersions(
         existingDocuments,
@@ -153,6 +206,8 @@ export class DatabaseStateRepository {
       } else {
         await this.insertState(client, validated);
       }
+      await this.insertDocuments(client, documentChanges.inserted);
+      await this.updateDocuments(client, documentChanges.updated);
       await this.insertAuditEvents(client, appendedAudit);
       await this.insertDocumentVersions(client, appendedVersions);
 
@@ -169,7 +224,8 @@ export class DatabaseStateRepository {
   }
 
   async readHydratedState(client, storedState) {
-    const [auditResult, versionResult] = await Promise.all([
+    const [documentResult, auditResult, versionResult] = await Promise.all([
+      client.query(SELECT_DOCUMENTS, [this.institutionKey]),
       client.query(SELECT_AUDIT, [this.institutionKey]),
       client.query(SELECT_DOCUMENT_VERSIONS, [this.institutionKey]),
     ]);
@@ -183,9 +239,9 @@ export class DatabaseStateRepository {
 
     return this.validate({
       ...storedState,
-      documents: (storedState.documents ?? []).map((document) => ({
-        ...document,
-        versions: versionsByDocument.get(document.id) ?? [],
+      documents: documentResult.rows.map((row) => ({
+        ...row.document_data,
+        versions: versionsByDocument.get(row.document_id) ?? [],
       })),
       audit: auditResult.rows.map((row) => row.event),
     });
@@ -212,6 +268,29 @@ export class DatabaseStateRepository {
 
     if ((result.rowCount ?? result.rows.length) !== 1) {
       throw new Error("STATE_WRITE_CONFLICT");
+    }
+  }
+
+  async insertDocuments(client, documents) {
+    for (const document of documents) {
+      try {
+        await client.query(INSERT_DOCUMENT, documentValues(this.institutionKey, document));
+      } catch (error) {
+        if (isUniqueViolation(error)) throw new Error("DOCUMENT_CONFLICT");
+        throw error;
+      }
+    }
+  }
+
+  async updateDocuments(client, documents) {
+    for (const document of documents) {
+      const result = await client.query(
+        UPDATE_DOCUMENT,
+        documentValues(this.institutionKey, document),
+      );
+      if ((result.rowCount ?? result.rows.length) !== 1) {
+        throw new Error("DOCUMENT_WRITE_CONFLICT");
+      }
     }
   }
 
@@ -263,14 +342,61 @@ function withoutNormalizedCollections(state) {
   return {
     ...state,
     audit: [],
-    documents: state.documents.map((document) => ({ ...document, versions: [] })),
+    documents: [],
   };
+}
+
+function documentValues(institutionKey, document) {
+  return [
+    institutionKey,
+    document.id,
+    document.ownerType,
+    document.ownerId,
+    document.packageId ?? null,
+    document.type,
+    document.title,
+    document.status,
+    document.templateClass,
+    document.sourceVerificationRequired,
+    document.signedBy ?? null,
+    document.verifiedBy ?? null,
+    JSON.stringify(withoutVersions(document)),
+  ];
+}
+
+function withoutVersions(document) {
+  const { versions: _versions, ...metadata } = document;
+  return metadata;
 }
 
 function flattenDocumentVersions(documents) {
   return documents.flatMap((document) =>
     document.versions.map((version) => ({ documentId: document.id, version })),
   );
+}
+
+function reconcileDocuments(existingDocuments, nextDocuments) {
+  const existingById = new Map(existingDocuments.map((document) => [document.id, document]));
+  const nextById = new Map(nextDocuments.map((document) => [document.id, document]));
+  const inserted = [];
+  const updated = [];
+
+  if (nextById.size !== nextDocuments.length) throw new Error("DOCUMENT_ID_CONFLICT");
+
+  for (const existing of existingDocuments) {
+    const next = nextById.get(existing.id);
+    if (!next) throw new Error("DOCUMENT_DELETION_NOT_SUPPORTED");
+    if (JSON.stringify(withoutVersions(existing)) !== JSON.stringify(withoutVersions(next))) {
+      updated.push(next);
+    }
+    existingById.delete(existing.id);
+  }
+
+  for (const document of nextDocuments) {
+    if (existingById.has(document.id)) inserted.push(document);
+  }
+
+  return { inserted, updated };
 }
 
 function assertAppendOnlyAudit(existing, next) {
