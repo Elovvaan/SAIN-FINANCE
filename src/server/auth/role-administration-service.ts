@@ -21,6 +21,29 @@ export type RoleRevocationInput = {
   reason: string;
 };
 
+type AssignableUserRow = {
+  user_id: string;
+  email: string;
+  status: string;
+};
+
+type RoleRow = {
+  role_id: string;
+  role_code: string;
+};
+
+type PermissionRow = {
+  permission_code: string;
+};
+
+type UserRoleAssignmentRow = {
+  user_role_id: string;
+  user_id: string;
+  role_id: string;
+  status: string;
+  role_code: string;
+};
+
 function parseDate(value: string | undefined, fallback: Date) {
   if (!value) return fallback;
   const parsed = new Date(value);
@@ -66,9 +89,9 @@ export async function assignUserRole(input: RoleAssignmentInput) {
        FOR UPDATE`,
       [input.institutionKey, input.targetUserId],
     );
-    const user = userResult.rows[0];
+    const user = userResult.rows[0] as AssignableUserRow | undefined;
     if (!user) throw new Error("USER_NOT_FOUND");
-    if (!['PENDING', 'ACTIVE'].includes(user.status)) throw new Error("USER_NOT_ASSIGNABLE");
+    if (!["PENDING", "ACTIVE"].includes(user.status)) throw new Error("USER_NOT_ASSIGNABLE");
 
     const roleResult = await client.query(
       `SELECT role_id, role_code
@@ -80,7 +103,7 @@ export async function assignUserRole(input: RoleAssignmentInput) {
        LIMIT 1`,
       [input.roleCode, input.institutionKey],
     );
-    const role = roleResult.rows[0];
+    const role = roleResult.rows[0] as RoleRow | undefined;
     if (!role) throw new Error("ROLE_NOT_FOUND");
 
     const duplicate = await client.query(
@@ -122,7 +145,7 @@ export async function assignUserRole(input: RoleAssignmentInput) {
     );
 
     const authorityGrantIds: string[] = [];
-    for (const row of permissions.rows) {
+    for (const row of permissions.rows as PermissionRow[]) {
       const authorityGrantId = randomUUID();
       authorityGrantIds.push(authorityGrantId);
       await client.query(
@@ -139,7 +162,7 @@ export async function assignUserRole(input: RoleAssignmentInput) {
           effectiveAt.toISOString(),
           expiresAt?.toISOString() ?? null,
           input.actorEmail,
-          JSON.stringify({ source: 'ROLE_ASSIGNMENT', userRoleId, roleCode: role.role_code }),
+          JSON.stringify({ source: "ROLE_ASSIGNMENT", userRoleId, roleCode: role.role_code }),
         ],
       );
       await client.query(
@@ -173,7 +196,7 @@ export async function assignUserRole(input: RoleAssignmentInput) {
       userRoleId,
       userId: input.targetUserId,
       roleCode: role.role_code,
-      status: 'ACTIVE',
+      status: "ACTIVE",
       effectiveAt: effectiveAt.toISOString(),
       expiresAt: expiresAt?.toISOString(),
       authorityGrantIds,
@@ -196,9 +219,9 @@ export async function revokeUserRole(input: RoleRevocationInput) {
        FOR UPDATE`,
       [input.institutionKey, input.userRoleId],
     );
-    const assignment = roleResult.rows[0];
+    const assignment = roleResult.rows[0] as UserRoleAssignmentRow | undefined;
     if (!assignment) throw new Error("USER_ROLE_NOT_FOUND");
-    if (assignment.status !== 'ACTIVE') throw new Error("USER_ROLE_NOT_ACTIVE");
+    if (assignment.status !== "ACTIVE") throw new Error("USER_ROLE_NOT_ACTIVE");
 
     await client.query(
       `UPDATE user_roles
@@ -233,6 +256,6 @@ export async function revokeUserRole(input: RoleRevocationInput) {
       ],
     );
 
-    return { userRoleId: input.userRoleId, status: 'REVOKED' };
+    return { userRoleId: input.userRoleId, status: "REVOKED" };
   });
 }
