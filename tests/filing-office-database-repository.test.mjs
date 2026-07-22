@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { DatabaseStateRepository } from "../src/server/finance/database-state-repository.ts";
+import { DatabaseStateRepository } from "../src/server/finance/database-state-repository.js";
 
 function validateState(value) {
   if (!value || typeof value !== "object" || value.schemaVersion !== 1) {
