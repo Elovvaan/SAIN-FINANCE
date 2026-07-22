@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 export async function GET(request: NextRequest) {
   try {
     const memberView = request.nextUrl.searchParams.get("view") === "relationship";
-    if (!memberView) requireOperator(request);
+    if (!memberView) await requireOperator(request);
     return NextResponse.json(await getFilingOfficeSnapshot(memberView));
   } catch (error) {
     const message = error instanceof Error ? error.message : "UNKNOWN_ERROR";
