@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { handleAuthorityAndPackageOperation } from "./authority-package-operations";
+import { handleCollateralOperation } from "./collateral-operations";
 import { handleDocumentOperation } from "./document-operations";
 import {
   appendAuditEvent,
   assertAuthority,
   computePackageCompletion,
   now,
-  type CollateralRecord,
   type FilingPackage,
   type FilingState,
   type SubmissionRecord,
@@ -71,7 +71,8 @@ export async function runFilingOfficeOperation(input: Record<string, unknown>) {
   const context = { state, operation, actorId, input };
   const delegatedResult =
     handleAuthorityAndPackageOperation(context) ??
-    handleDocumentOperation(context);
+    handleDocumentOperation(context) ??
+    handleCollateralOperation(context);
 
   if (delegatedResult !== undefined) {
     await repository.save(state);
@@ -81,48 +82,6 @@ export async function runFilingOfficeOperation(input: Record<string, unknown>) {
   let result: unknown;
 
   switch (operation) {
-    case "addCollateralRecord": {
-      const authority = assertAuthority(state, actorId, "COLLATERAL_ADD");
-      const amount = Number(input.amount);
-      if (!Number.isFinite(amount) || amount <= 0) throw new Error("INVALID_COLLATERAL_AMOUNT");
-      const record: CollateralRecord = {
-        id: randomUUID(),
-        institutionId: state.institution.id,
-        description: String(input.description),
-        amount,
-        status: input.exception ? "EXCEPTION" : "PLEDGED",
-        electronic: Boolean(input.electronic),
-        creditCardReceivable: Boolean(input.creditCardReceivable),
-        thirdPartyCustodian: Boolean(input.thirdPartyCustodian),
-        createdAt: now(),
-      };
-      state.collateral.push(record);
-      appendAuditEvent(state, actorId, operation, record.id, undefined, record.status, authority.id);
-      result = record;
-      break;
-    }
-
-    case "withdrawCollateralRecord": {
-      const authority = assertAuthority(state, actorId, "COLLATERAL_WITHDRAW");
-      const record = state.collateral.find((candidate) => candidate.id === input.collateralId);
-      if (!record) throw new Error("COLLATERAL_NOT_FOUND");
-      const previous = record.status;
-      record.status = "WITHDRAWN";
-      record.withdrawnAt = now();
-      appendAuditEvent(state, actorId, operation, record.id, previous, record.status, authority.id);
-      result = record;
-      break;
-    }
-
-    case "generateCollateralSchedule": {
-      const authority = assertAuthority(state, actorId, "DOCUMENT_GENERATE");
-      const records = state.collateral.filter((item) => item.status === "PLEDGED");
-      const total = records.reduce((sum, item) => sum + item.amount, 0);
-      result = { total, records };
-      appendAuditEvent(state, actorId, operation, String(input.packageId), undefined, String(total), authority.id);
-      break;
-    }
-
     case "exportSubmissionPackage": {
       const authority = assertAuthority(state, actorId, "PACKAGE_EXPORT");
       const packageItem = state.packages.find((candidate) => candidate.id === input.packageId);
