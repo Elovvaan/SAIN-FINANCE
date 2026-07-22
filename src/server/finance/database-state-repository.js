@@ -3,6 +3,7 @@ const SELECT_STATE_FOR_UPDATE = `${SELECT_STATE} FOR UPDATE`;
 const SELECT_AUDIT = `SELECT event FROM filing_office_audit_events WHERE institution_key = $1 ORDER BY occurred_at ASC, event_id ASC`;
 const SELECT_DOCUMENTS = `SELECT document_id, document_order, document_data FROM filing_office_documents WHERE institution_key = $1 ORDER BY document_order ASC`;
 const SELECT_DOCUMENT_VERSIONS = `SELECT document_id, version_data FROM filing_office_document_versions WHERE institution_key = $1 ORDER BY document_id ASC, version_number ASC`;
+const SELECT_PACKAGES = `SELECT package_id, package_order, package_data FROM filing_office_packages WHERE institution_key = $1 ORDER BY package_order ASC`;
 
 const INSERT_STATE = `
   INSERT INTO filing_office_state (institution_key, state, revision, created_at, updated_at)
@@ -41,6 +42,28 @@ const UPDATE_DOCUMENT = `
       updated_at = NOW()
   WHERE institution_key = $1 AND document_id = $2
 `;
+const INSERT_PACKAGE = `
+  INSERT INTO filing_office_packages (
+    institution_key, package_id, package_order, owner_type, owner_id,
+    package_type, status, completion_percentage, return_reason,
+    package_data, created_at, updated_at
+  ) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, NOW(), NOW()
+  )
+`;
+const UPDATE_PACKAGE = `
+  UPDATE filing_office_packages
+  SET package_order = $3,
+      owner_type = $4,
+      owner_id = $5,
+      package_type = $6,
+      status = $7,
+      completion_percentage = $8,
+      return_reason = $9,
+      package_data = $10::jsonb,
+      updated_at = NOW()
+  WHERE institution_key = $1 AND package_id = $2
+`;
 const INSERT_AUDIT_EVENT = `
   INSERT INTO filing_office_audit_events (
     institution_key, event_id, actor_id, operation, target_id, occurred_at,
@@ -78,20 +101,34 @@ export class DatabaseStateRepository {
       const validated = this.validate(state);
       if (!current) {
         await this.insertState(client, validated);
-        await this.insertDocuments(client, indexedDocuments(validated.documents));
+        await this.insertDocuments(client, indexed(validated.documents));
+        await this.insertPackages(client, indexed(validated.packages));
         await this.insertAuditEvents(client, validated.audit);
         await this.insertDocumentVersions(client, flattenDocumentVersions(validated.documents));
         return;
       }
 
       const persisted = await this.readHydratedState(client, current.state);
-      const changes = reconcileDocuments(persisted.documents, validated.documents);
+      const documentChanges = reconcileCollection(
+        persisted.documents,
+        validated.documents,
+        "DOCUMENT",
+        withoutVersions,
+      );
+      const packageChanges = reconcileCollection(
+        persisted.packages,
+        validated.packages,
+        "PACKAGE",
+        identity,
+      );
       const appendedAudit = assertAppendOnlyAudit(persisted.audit, validated.audit);
       const appendedVersions = assertAppendOnlyDocumentVersions(persisted.documents, validated.documents);
 
       await this.updateState(client, validated, current.revision);
-      await this.insertDocuments(client, changes.inserted);
-      await this.updateDocuments(client, changes.updated);
+      await this.insertDocuments(client, documentChanges.inserted);
+      await this.updateDocuments(client, documentChanges.updated);
+      await this.insertPackages(client, packageChanges.inserted);
+      await this.updatePackages(client, packageChanges.updated);
       await this.insertAuditEvents(client, appendedAudit);
       await this.insertDocumentVersions(client, appendedVersions);
     });
@@ -103,11 +140,13 @@ export class DatabaseStateRepository {
       let state;
       let existingAudit = [];
       let existingDocuments = [];
+      let existingPackages = [];
 
       if (current) {
         state = await this.readHydratedState(client, current.state);
         existingAudit = structuredClone(state.audit);
         existingDocuments = structuredClone(state.documents);
+        existingPackages = structuredClone(state.packages);
       } else if (this.allowInitialState) {
         state = this.createInitialState();
       } else {
@@ -116,14 +155,17 @@ export class DatabaseStateRepository {
 
       const result = await callback(state);
       const validated = this.validate(state);
-      const changes = reconcileDocuments(existingDocuments, validated.documents);
+      const documentChanges = reconcileCollection(existingDocuments, validated.documents, "DOCUMENT", withoutVersions);
+      const packageChanges = reconcileCollection(existingPackages, validated.packages, "PACKAGE", identity);
       const appendedAudit = assertAppendOnlyAudit(existingAudit, validated.audit);
       const appendedVersions = assertAppendOnlyDocumentVersions(existingDocuments, validated.documents);
 
       if (current) await this.updateState(client, validated, current.revision);
       else await this.insertState(client, validated);
-      await this.insertDocuments(client, changes.inserted);
-      await this.updateDocuments(client, changes.updated);
+      await this.insertDocuments(client, documentChanges.inserted);
+      await this.updateDocuments(client, documentChanges.updated);
+      await this.insertPackages(client, packageChanges.inserted);
+      await this.updatePackages(client, packageChanges.updated);
       await this.insertAuditEvents(client, appendedAudit);
       await this.insertDocumentVersions(client, appendedVersions);
       return result;
@@ -136,8 +178,9 @@ export class DatabaseStateRepository {
   }
 
   async readHydratedState(client, storedState) {
-    const [documentResult, auditResult, versionResult] = await Promise.all([
+    const [documentResult, packageResult, auditResult, versionResult] = await Promise.all([
       client.query(SELECT_DOCUMENTS, [this.institutionKey]),
+      client.query(SELECT_PACKAGES, [this.institutionKey]),
       client.query(SELECT_AUDIT, [this.institutionKey]),
       client.query(SELECT_DOCUMENT_VERSIONS, [this.institutionKey]),
     ]);
@@ -153,6 +196,7 @@ export class DatabaseStateRepository {
         ...row.document_data,
         versions: versionsByDocument.get(row.document_id) ?? [],
       })),
+      packages: packageResult.rows.map((row) => row.package_data),
       audit: auditResult.rows.map((row) => row.event),
     });
   }
@@ -189,6 +233,24 @@ export class DatabaseStateRepository {
     }
   }
 
+  async insertPackages(client, entries) {
+    for (const entry of entries) {
+      try {
+        await client.query(INSERT_PACKAGE, packageValues(this.institutionKey, entry));
+      } catch (error) {
+        if (isUniqueViolation(error)) throw new Error("PACKAGE_CONFLICT");
+        throw error;
+      }
+    }
+  }
+
+  async updatePackages(client, entries) {
+    for (const entry of entries) {
+      const result = await client.query(UPDATE_PACKAGE, packageValues(this.institutionKey, entry));
+      if ((result.rowCount ?? result.rows.length) !== 1) throw new Error("PACKAGE_WRITE_CONFLICT");
+    }
+  }
+
   async insertAuditEvents(client, events) {
     for (const event of events) {
       try {
@@ -221,14 +283,14 @@ export class DatabaseStateRepository {
 }
 
 function withoutNormalizedCollections(state) {
-  return { ...state, audit: [], documents: [] };
+  return { ...state, audit: [], documents: [], packages: [] };
 }
 
-function indexedDocuments(documents) {
-  return documents.map((document, index) => ({ document, index }));
+function indexed(items) {
+  return items.map((item, index) => ({ item, index }));
 }
 
-function documentValues(institutionKey, { document, index }) {
+function documentValues(institutionKey, { item: document, index }) {
   return [
     institutionKey, document.id, index, document.ownerType, document.ownerId,
     document.packageId ?? null, document.type, document.title, document.status,
@@ -238,28 +300,47 @@ function documentValues(institutionKey, { document, index }) {
   ];
 }
 
+function packageValues(institutionKey, { item: packageItem, index }) {
+  return [
+    institutionKey,
+    packageItem.id,
+    index,
+    packageItem.ownerType,
+    packageItem.ownerId,
+    packageItem.type,
+    packageItem.status,
+    packageItem.completionPercentage,
+    packageItem.returnReason ?? null,
+    JSON.stringify(packageItem),
+  ];
+}
+
 function withoutVersions(document) {
   const { versions: _versions, ...metadata } = document;
   return metadata;
+}
+
+function identity(value) {
+  return value;
 }
 
 function flattenDocumentVersions(documents) {
   return documents.flatMap((document) => document.versions.map((version) => ({ documentId: document.id, version })));
 }
 
-function reconcileDocuments(existingDocuments, nextDocuments) {
-  const existingById = new Map(existingDocuments.map((document, index) => [document.id, { document, index }]));
-  const nextById = new Map(nextDocuments.map((document, index) => [document.id, { document, index }]));
-  if (nextById.size !== nextDocuments.length) throw new Error("DOCUMENT_ID_CONFLICT");
+function reconcileCollection(existingItems, nextItems, label, comparable) {
+  const existingById = new Map(existingItems.map((item, index) => [item.id, { item, index }]));
+  const nextById = new Map(nextItems.map((item, index) => [item.id, { item, index }]));
+  if (nextById.size !== nextItems.length) throw new Error(`${label}_ID_CONFLICT`);
 
   const inserted = [];
   const updated = [];
   for (const [id, existing] of existingById) {
     const next = nextById.get(id);
-    if (!next) throw new Error("DOCUMENT_DELETION_NOT_SUPPORTED");
+    if (!next) throw new Error(`${label}_DELETION_NOT_SUPPORTED`);
     if (
       existing.index !== next.index ||
-      JSON.stringify(withoutVersions(existing.document)) !== JSON.stringify(withoutVersions(next.document))
+      JSON.stringify(comparable(existing.item)) !== JSON.stringify(comparable(next.item))
     ) updated.push(next);
   }
   for (const [id, next] of nextById) if (!existingById.has(id)) inserted.push(next);
