@@ -3,7 +3,6 @@ import { isAuthorityActive } from "./authority-policy.js";
 
 export type OwnerType = "INSTITUTION" | "RELATIONSHIP";
 export type PackageStatus =
-  | "ASSEMBING"
   | "ASSEMBLING"
   | "REQUIRES_ACTION"
   | "AWAITING_SIGNATURE"
