@@ -24,6 +24,53 @@ test("in-memory repository isolates loaded state from stored state", async () =>
   assert.deepEqual(second, { schemaVersion: 1, items: [] });
 });
 
+test("in-memory transactions serialize concurrent mutations", async () => {
+  const repository = new InMemoryStateRepository({ schemaVersion: 1, count: 0 });
+
+  await Promise.all(
+    Array.from({ length: 25 }, () =>
+      repository.transact(async (state) => {
+        const current = state.count;
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        state.count = current + 1;
+      }),
+    ),
+  );
+
+  assert.equal((await repository.load()).count, 25);
+});
+
+test("failed transactions do not persist partial mutations", async () => {
+  const repository = new InMemoryStateRepository({ schemaVersion: 1, items: [] });
+
+  await assert.rejects(
+    () => repository.transact((state) => {
+      state.items.push("partial");
+      throw new Error("TRANSACTION_FAILED");
+    }),
+    /TRANSACTION_FAILED/,
+  );
+
+  assert.deepEqual(await repository.load(), { schemaVersion: 1, items: [] });
+});
+
+test("transaction queue continues after a failed transaction", async () => {
+  const repository = new InMemoryStateRepository({ schemaVersion: 1, count: 0 });
+
+  await assert.rejects(
+    () => repository.transact(() => {
+      throw new Error("EXPECTED_FAILURE");
+    }),
+    /EXPECTED_FAILURE/,
+  );
+
+  await repository.transact((state) => {
+    state.count += 1;
+  });
+
+  assert.equal((await repository.load()).count, 1);
+});
+
 test("json repository creates an initial state only when explicitly allowed", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "sain-store-"));
   try {
@@ -106,6 +153,34 @@ test("json repository preserves the previous primary as a backup before replacem
       schemaVersion: 1,
       items: ["first"],
     });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("json transactions serialize concurrent mutations", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "sain-store-"));
+  try {
+    const repository = new JsonFileStateRepository({
+      dataDirectory: directory,
+      fileName: "state.json",
+      backupFileName: "state.backup.json",
+      validate: validateState,
+      createInitialState: () => ({ schemaVersion: 1, count: 0 }),
+      allowInitialState: true,
+    });
+
+    await Promise.all(
+      Array.from({ length: 10 }, () =>
+        repository.transact(async (state) => {
+          const current = state.count;
+          await new Promise((resolve) => setTimeout(resolve, 1));
+          state.count = current + 1;
+        }),
+      ),
+    );
+
+    assert.equal((await repository.load()).count, 10);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
