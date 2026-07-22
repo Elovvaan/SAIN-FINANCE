@@ -61,6 +61,18 @@ function collateral(id = "collateral-1") {
   };
 }
 
+function submission(id = "submission-1") {
+  return {
+    id,
+    packageId: "package-1",
+    destination: "Federal Reserve Bank",
+    manifest: [{ documentId: "document-1", version: 1, checksum: "checksum-1" }],
+    submittedAt: "2026-07-22T12:30:00.000Z",
+    submittedBy: "actor-1",
+    status: "SUBMITTED",
+  };
+}
+
 function state(items = []) {
   return {
     schemaVersion: 1,
@@ -69,12 +81,13 @@ function state(items = []) {
     documents: [],
     packages: [],
     collateral: [],
+    submissions: [],
   };
 }
 
 function validate(value) {
   if (!value || value.schemaVersion !== 1) throw new Error("INVALID_STATE");
-  for (const key of ["audit", "documents", "packages", "collateral"]) {
+  for (const key of ["audit", "documents", "packages", "collateral", "submissions"]) {
     if (!Array.isArray(value[key])) throw new Error("INVALID_COLLECTIONS");
   }
   return structuredClone(value);
@@ -92,12 +105,13 @@ function uniqueError(message) {
 }
 
 class FakeDatabase {
-  constructor({ row, auditEvents = [], documents = [], packages = [], collateralRecords = [], versions = [] } = {}) {
+  constructor({ row, auditEvents = [], documents = [], packages = [], collateralRecords = [], submissions = [], versions = [] } = {}) {
     this.row = row ? structuredClone(row) : undefined;
     this.audit = structuredClone(auditEvents);
     this.documents = documents.map((item, order) => ({ order, data: withoutVersions(structuredClone(item)) }));
     this.packages = packages.map((item, order) => ({ order, data: structuredClone(item) }));
     this.collateral = collateralRecords.map((item, order) => ({ order, data: structuredClone(item) }));
+    this.submissions = submissions.map((item, order) => ({ order, data: structuredClone(item) }));
     this.versions = structuredClone(versions);
     this.queue = Promise.resolve();
   }
@@ -110,6 +124,7 @@ class FakeDatabase {
         documents: this.documents,
         packages: this.packages,
         collateral: this.collateral,
+        submissions: this.submissions,
         versions: this.versions,
       });
       const client = { query: (text, values = []) => this.query(text, values) };
@@ -129,28 +144,16 @@ class FakeDatabase {
       return { rows: this.row ? [structuredClone(this.row)] : [], rowCount: this.row ? 1 : 0 };
     }
     if (text.includes("SELECT document_id, document_order, document_data")) {
-      const rows = this.documents.slice().sort((a, b) => a.order - b.order).map((entry) => ({
-        document_id: entry.data.id,
-        document_order: entry.order,
-        document_data: structuredClone(entry.data),
-      }));
-      return { rows, rowCount: rows.length };
+      return this.selectCollection(this.documents, "document_id", "document_order", "document_data");
     }
     if (text.includes("SELECT package_id, package_order, package_data")) {
-      const rows = this.packages.slice().sort((a, b) => a.order - b.order).map((entry) => ({
-        package_id: entry.data.id,
-        package_order: entry.order,
-        package_data: structuredClone(entry.data),
-      }));
-      return { rows, rowCount: rows.length };
+      return this.selectCollection(this.packages, "package_id", "package_order", "package_data");
     }
     if (text.includes("SELECT collateral_id, collateral_order, collateral_data")) {
-      const rows = this.collateral.slice().sort((a, b) => a.order - b.order).map((entry) => ({
-        collateral_id: entry.data.id,
-        collateral_order: entry.order,
-        collateral_data: structuredClone(entry.data),
-      }));
-      return { rows, rowCount: rows.length };
+      return this.selectCollection(this.collateral, "collateral_id", "collateral_order", "collateral_data");
+    }
+    if (text.includes("SELECT submission_id, submission_order, submission_data")) {
+      return this.selectCollection(this.submissions, "submission_id", "submission_order", "submission_data");
     }
     if (text.includes("SELECT event") && text.includes("filing_office_audit_events")) {
       return { rows: this.audit.map((event) => ({ event: structuredClone(event) })), rowCount: this.audit.length };
@@ -172,24 +175,14 @@ class FakeDatabase {
       this.row = { state: JSON.parse(values[1]), revision: this.row.revision + 1 };
       return { rows: [{ revision: this.row.revision }], rowCount: 1 };
     }
-    if (text.includes("INSERT INTO filing_office_documents")) {
-      if (this.documents.some((entry) => entry.data.id === values[1])) throw uniqueError("duplicate document");
-      this.documents.push({ order: values[2], data: JSON.parse(values[13]) });
-      return { rows: [], rowCount: 1 };
-    }
+    if (text.includes("INSERT INTO filing_office_documents")) return this.insertCollection(this.documents, values, 13, "document");
     if (text.includes("UPDATE filing_office_documents")) return this.updateCollection(this.documents, values, 13);
-    if (text.includes("INSERT INTO filing_office_packages")) {
-      if (this.packages.some((entry) => entry.data.id === values[1])) throw uniqueError("duplicate package");
-      this.packages.push({ order: values[2], data: JSON.parse(values[9]) });
-      return { rows: [], rowCount: 1 };
-    }
+    if (text.includes("INSERT INTO filing_office_packages")) return this.insertCollection(this.packages, values, 9, "package");
     if (text.includes("UPDATE filing_office_packages")) return this.updateCollection(this.packages, values, 9);
-    if (text.includes("INSERT INTO filing_office_collateral")) {
-      if (this.collateral.some((entry) => entry.data.id === values[1])) throw uniqueError("duplicate collateral");
-      this.collateral.push({ order: values[2], data: JSON.parse(values[12]) });
-      return { rows: [], rowCount: 1 };
-    }
+    if (text.includes("INSERT INTO filing_office_collateral")) return this.insertCollection(this.collateral, values, 12, "collateral");
     if (text.includes("UPDATE filing_office_collateral")) return this.updateCollection(this.collateral, values, 12);
+    if (text.includes("INSERT INTO filing_office_submissions")) return this.insertCollection(this.submissions, values, 10, "submission");
+    if (text.includes("UPDATE filing_office_submissions")) return this.updateCollection(this.submissions, values, 10);
     if (text.includes("INSERT INTO filing_office_audit_events")) {
       if (this.audit.some((event) => event.id === values[1])) throw uniqueError("duplicate audit");
       this.audit.push(JSON.parse(values[9]));
@@ -203,6 +196,21 @@ class FakeDatabase {
       return { rows: [], rowCount: 1 };
     }
     throw new Error(`UNEXPECTED_SQL: ${text}`);
+  }
+
+  selectCollection(collection, idKey, orderKey, dataKey) {
+    const rows = collection.slice().sort((a, b) => a.order - b.order).map((entry) => ({
+      [idKey]: entry.data.id,
+      [orderKey]: entry.order,
+      [dataKey]: structuredClone(entry.data),
+    }));
+    return { rows, rowCount: rows.length };
+  }
+
+  insertCollection(collection, values, jsonIndex, label) {
+    if (collection.some((entry) => entry.data.id === values[1])) throw uniqueError(`duplicate ${label}`);
+    collection.push({ order: values[2], data: JSON.parse(values[jsonIndex]) });
+    return { rows: [], rowCount: 1 };
   }
 
   updateCollection(collection, values, jsonIndex) {
@@ -234,11 +242,13 @@ test("initial state and normalized collections commit together", async () => {
     current.items.push("created");
     current.packages.push(packageItem());
     current.collateral.push(collateral());
+    current.submissions.push(submission());
   });
   const loaded = await repo.load();
   assert.deepEqual(loaded.items, ["created"]);
   assert.equal(loaded.packages.length, 1);
   assert.equal(loaded.collateral.length, 1);
+  assert.equal(loaded.submissions.length, 1);
   assert.deepEqual(database.row.state, state(["created"]));
 });
 
@@ -249,6 +259,7 @@ test("all normalized collections hydrate and update outside aggregate JSON", asy
     documents: [document()],
     packages: [packageItem()],
     collateralRecords: [collateral()],
+    submissions: [submission()],
     versions: [{ documentId: "document-1", version: version(1) }],
   });
   const repo = repository(database);
@@ -257,14 +268,17 @@ test("all normalized collections hydrate and update outside aggregate JSON", asy
     current.documents[0].versions.push(version(2));
     current.packages[0].status = "READY_FOR_SUBMISSION";
     current.packages[0].completionPercentage = 100;
+    current.packages[0].submissionIds.push("submission-1");
     current.collateral[0].status = "WITHDRAWN";
     current.collateral[0].withdrawnAt = "2026-07-22T13:00:00.000Z";
+    current.submissions[0].status = "RECEIVED";
     current.audit.push(audit("audit-2"));
   });
   const loaded = await repo.load();
   assert.equal(loaded.documents[0].versions.length, 2);
   assert.equal(loaded.packages[0].completionPercentage, 100);
   assert.equal(loaded.collateral[0].status, "WITHDRAWN");
+  assert.equal(loaded.submissions[0].status, "RECEIVED");
   assert.deepEqual(database.row.state, state());
 });
 
@@ -273,15 +287,18 @@ test("collection ordering is preserved and intentional reordering persists", asy
     row: { state: state(), revision: 2 },
     packages: [packageItem("package-z"), packageItem("package-a")],
     collateralRecords: [collateral("collateral-z"), collateral("collateral-a")],
+    submissions: [submission("submission-z"), submission("submission-a")],
   });
   const repo = repository(database);
   await repo.transact((current) => {
     current.packages.reverse();
     current.collateral.reverse();
+    current.submissions.reverse();
   });
   const loaded = await repo.load();
   assert.deepEqual(loaded.packages.map((item) => item.id), ["package-a", "package-z"]);
   assert.deepEqual(loaded.collateral.map((item) => item.id), ["collateral-a", "collateral-z"]);
+  assert.deepEqual(loaded.submissions.map((item) => item.id), ["submission-a", "submission-z"]);
 });
 
 test("normalized collection deletion and duplicate IDs are rejected", async () => {
@@ -289,12 +306,28 @@ test("normalized collection deletion and duplicate IDs are rejected", async () =
     row: { state: state(), revision: 2 },
     packages: [packageItem()],
     collateralRecords: [collateral()],
+    submissions: [submission()],
   });
   const repo = repository(database);
   await assert.rejects(() => repo.transact((current) => current.packages.splice(0, 1)), /PACKAGE_DELETION_NOT_SUPPORTED/);
   await assert.rejects(() => repo.transact((current) => current.collateral.splice(0, 1)), /COLLATERAL_DELETION_NOT_SUPPORTED/);
-  await assert.rejects(() => repo.transact((current) => current.collateral.push(collateral())), /COLLATERAL_ID_CONFLICT/);
+  await assert.rejects(() => repo.transact((current) => current.submissions.splice(0, 1)), /SUBMISSION_DELETION_NOT_SUPPORTED/);
+  await assert.rejects(() => repo.transact((current) => current.submissions.push(submission())), /SUBMISSION_ID_CONFLICT/);
   assert.equal(database.row.revision, 2);
+});
+
+test("submission workflow fields and manifest persist", async () => {
+  const database = new FakeDatabase({ row: { state: state(), revision: 2 }, submissions: [submission()] });
+  const repo = repository(database);
+  await repo.transact((current) => {
+    current.submissions[0].status = "RETURNED";
+    current.submissions[0].reason = "Checksum mismatch";
+    current.submissions[0].manifest.push({ documentId: "document-2", version: 3, checksum: "checksum-3" });
+  });
+  const loaded = await repo.load();
+  assert.equal(loaded.submissions[0].status, "RETURNED");
+  assert.equal(loaded.submissions[0].reason, "Checksum mismatch");
+  assert.equal(loaded.submissions[0].manifest.length, 2);
 });
 
 test("document versions remain immutable and sequential", async () => {
@@ -319,6 +352,7 @@ test("aggregate and normalized records roll back together", async () => {
     row: { state: state(["stable"]), revision: 2 },
     packages: [packageItem()],
     collateralRecords: [collateral()],
+    submissions: [submission()],
   });
   const repo = repository(database);
   await assert.rejects(
@@ -326,6 +360,7 @@ test("aggregate and normalized records roll back together", async () => {
       current.items.push("partial");
       current.packages[0].status = "READY_FOR_SUBMISSION";
       current.collateral[0].status = "WITHDRAWN";
+      current.submissions[0].status = "ACCEPTED";
       throw new Error("FAILED_OPERATION");
     }),
     /FAILED_OPERATION/,
@@ -334,6 +369,7 @@ test("aggregate and normalized records roll back together", async () => {
   assert.deepEqual(loaded.items, ["stable"]);
   assert.equal(loaded.packages[0].status, "ASSEMBLING");
   assert.equal(loaded.collateral[0].status, "PLEDGED");
+  assert.equal(loaded.submissions[0].status, "SUBMITTED");
   assert.equal(database.row.revision, 2);
 });
 
