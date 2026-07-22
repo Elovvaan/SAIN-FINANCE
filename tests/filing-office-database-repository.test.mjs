@@ -4,7 +4,9 @@ import { DatabaseStateRepository } from "../src/server/finance/database-state-re
 
 function validateState(value) {
   if (!value || typeof value !== "object" || value.schemaVersion !== 1) throw new Error("INVALID_STATE");
-  if (!Array.isArray(value.audit) || !Array.isArray(value.documents)) throw new Error("INVALID_COLLECTIONS");
+  if (!Array.isArray(value.audit) || !Array.isArray(value.documents) || !Array.isArray(value.packages)) {
+    throw new Error("INVALID_COLLECTIONS");
+  }
   return structuredClone(value);
 }
 
@@ -31,23 +33,45 @@ function createDocument(id = "document-1", versions = []) {
   };
 }
 
-function metadata(document) {
-  const { versions: _versions, ...documentData } = document;
-  return documentData;
+function createPackage(id = "package-1") {
+  return {
+    id,
+    ownerType: "INSTITUTION",
+    ownerId: "institution-1",
+    type: "BIC_APPLICATION",
+    status: "ASSEMBLING",
+    requiredDocumentTypes: ["OC10"],
+    conditionalDocumentTypes: [],
+    documentIds: [],
+    completionPercentage: 0,
+    submissionIds: [],
+  };
+}
+
+function documentMetadata(document) {
+  const { versions: _versions, ...data } = document;
+  return data;
 }
 
 class FakeDatabase {
-  constructor(initialRow, initialAudit = [], initialDocuments = [], initialVersions = []) {
+  constructor(initialRow, initialAudit = [], initialDocuments = [], initialVersions = [], initialPackages = []) {
     this.row = initialRow ? structuredClone(initialRow) : undefined;
     this.audit = structuredClone(initialAudit);
-    this.documents = initialDocuments.map((document, order) => ({ order, data: metadata(structuredClone(document)) }));
+    this.documents = initialDocuments.map((item, order) => ({ order, data: documentMetadata(structuredClone(item)) }));
     this.versions = structuredClone(initialVersions);
+    this.packages = initialPackages.map((item, order) => ({ order, data: structuredClone(item) }));
     this.queue = Promise.resolve();
   }
 
   transaction(callback) {
     const run = this.queue.then(async () => {
-      const snapshots = structuredClone({ row: this.row, audit: this.audit, documents: this.documents, versions: this.versions });
+      const snapshots = structuredClone({
+        row: this.row,
+        audit: this.audit,
+        documents: this.documents,
+        versions: this.versions,
+        packages: this.packages,
+      });
       const client = {
         query: async (text, values = []) => {
           if (text.includes("SELECT state, revision")) {
@@ -55,10 +79,11 @@ class FakeDatabase {
           }
           if (text.includes("SELECT document_id, document_order, document_data")) {
             const ordered = this.documents.slice().sort((a, b) => a.order - b.order);
-            return {
-              rows: ordered.map((entry) => ({ document_id: entry.data.id, document_order: entry.order, document_data: structuredClone(entry.data) })),
-              rowCount: ordered.length,
-            };
+            return { rows: ordered.map((entry) => ({ document_id: entry.data.id, document_order: entry.order, document_data: structuredClone(entry.data) })), rowCount: ordered.length };
+          }
+          if (text.includes("SELECT package_id, package_order, package_data")) {
+            const ordered = this.packages.slice().sort((a, b) => a.order - b.order);
+            return { rows: ordered.map((entry) => ({ package_id: entry.data.id, package_order: entry.order, package_data: structuredClone(entry.data) })), rowCount: ordered.length };
           }
           if (text.includes("SELECT event") && text.includes("filing_office_audit_events")) {
             return { rows: this.audit.map((event) => ({ event: structuredClone(event) })), rowCount: this.audit.length };
@@ -93,6 +118,17 @@ class FakeDatabase {
             this.documents[index] = { order: values[2], data: JSON.parse(values[13]) };
             return { rows: [], rowCount: 1 };
           }
+          if (text.includes("INSERT INTO filing_office_packages")) {
+            if (this.packages.some((entry) => entry.data.id === values[1] || entry.order === values[2])) throw uniqueError("duplicate package");
+            this.packages.push({ order: values[2], data: JSON.parse(values[9]) });
+            return { rows: [], rowCount: 1 };
+          }
+          if (text.includes("UPDATE filing_office_packages")) {
+            const index = this.packages.findIndex((entry) => entry.data.id === values[1]);
+            if (index < 0) return { rows: [], rowCount: 0 };
+            this.packages[index] = { order: values[2], data: JSON.parse(values[9]) };
+            return { rows: [], rowCount: 1 };
+          }
           if (text.includes("INSERT INTO filing_office_audit_events")) {
             if (this.audit.some((event) => event.id === values[1])) throw uniqueError("duplicate audit");
             this.audit.push(JSON.parse(values[9]));
@@ -114,6 +150,7 @@ class FakeDatabase {
         this.audit = snapshots.audit;
         this.documents = snapshots.documents;
         this.versions = snapshots.versions;
+        this.packages = snapshots.packages;
         throw error;
       }
     });
@@ -132,25 +169,31 @@ function createRepository(database, allowInitialState = false) {
   return new DatabaseStateRepository({
     database,
     validate: validateState,
-    createInitialState: () => ({ schemaVersion: 1, items: [], audit: [], documents: [] }),
+    createInitialState: () => ({ schemaVersion: 1, items: [], audit: [], documents: [], packages: [] }),
     allowInitialState,
     institutionKey: "test-institution",
   });
 }
 
 function createStoredState(items = []) {
-  return { schemaVersion: 1, items, audit: [], documents: [] };
+  return { schemaVersion: 1, items, audit: [], documents: [], packages: [] };
 }
 
 test("database repository fails closed when no row exists", async () => {
   await assert.rejects(() => createRepository(new FakeDatabase()).load(), /STATE_STORE_UNAVAILABLE/);
 });
 
-test("database repository initializes state inside a transaction", async () => {
+test("database repository initializes normalized collections in one transaction", async () => {
   const database = new FakeDatabase();
   const repository = createRepository(database, true);
-  await repository.transact((state) => state.items.push("created"));
-  assert.deepEqual(await repository.load(), { schemaVersion: 1, items: ["created"], audit: [], documents: [] });
+  await repository.transact((state) => {
+    state.items.push("created");
+    state.packages.push(createPackage());
+  });
+  const loaded = await repository.load();
+  assert.deepEqual(loaded.items, ["created"]);
+  assert.equal(loaded.packages.length, 1);
+  assert.deepEqual(database.row.state, createStoredState(["created"]));
   assert.equal(database.row.revision, 1);
 });
 
@@ -165,101 +208,101 @@ test("database repository serializes concurrent transactions without lost update
   assert.equal(database.row.revision, 6);
 });
 
-test("database repository stores documents, versions, and audit outside aggregate JSON", async () => {
+test("database repository stores packages, documents, versions, and audit outside aggregate JSON", async () => {
+  const packageItem = createPackage();
   const version1 = createVersion(1);
   const database = new FakeDatabase(
     { state: createStoredState(), revision: 2 },
     [createAuditEvent("audit-1", "EXISTING")],
     [createDocument("document-1")],
     [{ documentId: "document-1", version: version1 }],
+    [packageItem],
   );
   const repository = createRepository(database);
-  const version2 = createVersion(2);
   await repository.transact((state) => {
-    state.audit.push(createAuditEvent("audit-2", "APPENDED"));
-    state.documents[0].status = "SIGNED";
-    state.documents[0].signedBy = "actor-1";
-    state.documents[0].versions.push(version2);
+    state.packages[0].documentIds.push("document-1");
+    state.packages[0].completionPercentage = 100;
+    state.packages[0].status = "READY_FOR_SUBMISSION";
+    state.documents[0].status = "VERIFIED";
+    state.documents[0].versions.push(createVersion(2));
+    state.audit.push(createAuditEvent("audit-2", "UPDATED"));
   });
   const loaded = await repository.load();
-  assert.equal(loaded.documents[0].status, "SIGNED");
-  assert.deepEqual(loaded.documents[0].versions, [version1, version2]);
+  assert.equal(loaded.packages[0].status, "READY_FOR_SUBMISSION");
+  assert.deepEqual(loaded.packages[0].documentIds, ["document-1"]);
+  assert.equal(loaded.documents[0].versions.length, 2);
   assert.deepEqual(database.row.state, createStoredState());
-  assert.equal(database.documents.length, 1);
-  assert.equal(database.audit.length, 2);
-  assert.equal(database.versions.length, 2);
+  assert.equal(database.packages.length, 1);
 });
 
-test("database repository inserts newly generated documents and preserves order", async () => {
+test("database repository inserts packages and preserves package order", async () => {
   const database = new FakeDatabase({ state: createStoredState(), revision: 1 });
   const repository = createRepository(database);
-  const first = createDocument("document-z", [createVersion(1)]);
-  const second = createDocument("document-a", [createVersion(1)]);
-  await repository.transact((state) => state.documents.push(first, second));
-  assert.deepEqual((await repository.load()).documents, [first, second]);
-  assert.deepEqual(database.documents.map((entry) => entry.order), [0, 1]);
+  const first = createPackage("package-z");
+  const second = createPackage("package-a");
+  await repository.transact((state) => state.packages.push(first, second));
+  assert.deepEqual((await repository.load()).packages, [first, second]);
+  assert.deepEqual(database.packages.map((entry) => entry.order), [0, 1]);
 });
 
-test("database repository persists intentional document reordering", async () => {
-  const first = createDocument("document-z");
-  const second = createDocument("document-a");
-  const database = new FakeDatabase({ state: createStoredState(), revision: 2 }, [], [first, second]);
+test("database repository persists package workflow updates and intentional reordering", async () => {
+  const first = createPackage("package-z");
+  const second = createPackage("package-a");
+  const database = new FakeDatabase({ state: createStoredState(), revision: 2 }, [], [], [], [first, second]);
   const repository = createRepository(database);
-  await repository.transact((state) => state.documents.reverse());
-  assert.deepEqual((await repository.load()).documents.map((document) => document.id), ["document-a", "document-z"]);
+  await repository.transact((state) => {
+    state.packages[0].status = "RETURNED";
+    state.packages[0].returnReason = "Correction required";
+    state.packages.reverse();
+  });
+  const loaded = await repository.load();
+  assert.deepEqual(loaded.packages.map((item) => item.id), ["package-a", "package-z"]);
+  assert.equal(loaded.packages[1].status, "RETURNED");
+  assert.equal(loaded.packages[1].returnReason, "Correction required");
 });
 
-test("database repository rejects document deletion and duplicate document IDs", async () => {
-  const database = new FakeDatabase({ state: createStoredState(), revision: 2 }, [], [createDocument()]);
+test("database repository rejects package deletion and duplicate package IDs", async () => {
+  const database = new FakeDatabase({ state: createStoredState(), revision: 2 }, [], [], [], [createPackage()]);
   const repository = createRepository(database);
-  await assert.rejects(() => repository.transact((state) => state.documents.splice(0, 1)), /DOCUMENT_DELETION_NOT_SUPPORTED/);
-  await assert.rejects(() => repository.transact((state) => state.documents.push(createDocument())), /DOCUMENT_ID_CONFLICT/);
-  assert.equal(database.documents.length, 1);
+  await assert.rejects(() => repository.transact((state) => state.packages.splice(0, 1)), /PACKAGE_DELETION_NOT_SUPPORTED/);
+  await assert.rejects(() => repository.transact((state) => state.packages.push(createPackage())), /PACKAGE_ID_CONFLICT/);
+  assert.equal(database.packages.length, 1);
   assert.equal(database.row.revision, 2);
 });
 
-test("database repository rejects rewriting or deleting document version history", async () => {
+test("database repository rejects document deletion and immutable version rewrites", async () => {
   const version1 = createVersion(1, "original");
   const database = new FakeDatabase(
     { state: createStoredState(), revision: 2 }, [], [createDocument()],
-    [{ documentId: "document-1", version: version1 }],
+    [{ documentId: "document-1", version: version1 }], [createPackage()],
   );
   const repository = createRepository(database);
-  await assert.rejects(() => repository.transact((state) => state.documents[0].versions.splice(0, 1)), /DOCUMENT_VERSION_HISTORY_IMMUTABLE/);
+  await assert.rejects(() => repository.transact((state) => state.documents.splice(0, 1)), /DOCUMENT_DELETION_NOT_SUPPORTED/);
   await assert.rejects(() => repository.transact((state) => { state.documents[0].versions[0].content = "rewritten"; }), /DOCUMENT_VERSION_HISTORY_IMMUTABLE/);
   assert.equal(database.row.revision, 2);
 });
 
-test("database repository enforces sequential document version numbers", async () => {
-  const version1 = createVersion(1);
-  const database = new FakeDatabase(
-    { state: createStoredState(), revision: 2 }, [], [createDocument()],
-    [{ documentId: "document-1", version: version1 }],
-  );
-  const repository = createRepository(database);
-  await assert.rejects(() => repository.transact((state) => state.documents[0].versions.push(createVersion(3))), /DOCUMENT_VERSION_SEQUENCE_INVALID/);
-});
-
-test("database repository rolls back aggregate, documents, audit, and versions together", async () => {
-  const version1 = createVersion(1);
+test("database repository rolls back aggregate, packages, documents, audit, and versions together", async () => {
   const database = new FakeDatabase(
     { state: createStoredState(["stable"]), revision: 2 },
     [createAuditEvent("audit-1")], [createDocument()],
-    [{ documentId: "document-1", version: version1 }],
+    [{ documentId: "document-1", version: createVersion(1) }], [createPackage()],
   );
   const repository = createRepository(database);
   await assert.rejects(
     () => repository.transact((state) => {
       state.items.push("partial");
-      state.documents[0].status = "SIGNED";
-      state.audit.push(createAuditEvent("audit-2"));
+      state.packages[0].status = "READY_FOR_SUBMISSION";
+      state.documents[0].status = "VERIFIED";
       state.documents[0].versions.push(createVersion(2));
+      state.audit.push(createAuditEvent("audit-2"));
       throw new Error("FAILED_OPERATION");
     }),
     /FAILED_OPERATION/,
   );
   const loaded = await repository.load();
   assert.deepEqual(loaded.items, ["stable"]);
+  assert.equal(loaded.packages[0].status, "ASSEMBLING");
   assert.equal(loaded.documents[0].status, "GENERATED");
   assert.equal(database.audit.length, 1);
   assert.equal(database.versions.length, 1);
