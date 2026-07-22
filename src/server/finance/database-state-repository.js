@@ -4,6 +4,7 @@ const SELECT_AUDIT = `SELECT event FROM filing_office_audit_events WHERE institu
 const SELECT_DOCUMENTS = `SELECT document_id, document_order, document_data FROM filing_office_documents WHERE institution_key = $1 ORDER BY document_order ASC`;
 const SELECT_DOCUMENT_VERSIONS = `SELECT document_id, version_data FROM filing_office_document_versions WHERE institution_key = $1 ORDER BY document_id ASC, version_number ASC`;
 const SELECT_PACKAGES = `SELECT package_id, package_order, package_data FROM filing_office_packages WHERE institution_key = $1 ORDER BY package_order ASC`;
+const SELECT_COLLATERAL = `SELECT collateral_id, collateral_order, collateral_data FROM filing_office_collateral WHERE institution_key = $1 ORDER BY collateral_order ASC`;
 
 const INSERT_STATE = `
   INSERT INTO filing_office_state (institution_key, state, revision, created_at, updated_at)
@@ -64,6 +65,32 @@ const UPDATE_PACKAGE = `
       updated_at = NOW()
   WHERE institution_key = $1 AND package_id = $2
 `;
+const INSERT_COLLATERAL = `
+  INSERT INTO filing_office_collateral (
+    institution_key, collateral_id, collateral_order, institution_id,
+    description, amount, status, electronic, credit_card_receivable,
+    third_party_custodian, created_at, withdrawn_at, collateral_data, updated_at
+  ) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+    $11::timestamptz, $12::timestamptz, $13::jsonb, NOW()
+  )
+`;
+const UPDATE_COLLATERAL = `
+  UPDATE filing_office_collateral
+  SET collateral_order = $3,
+      institution_id = $4,
+      description = $5,
+      amount = $6,
+      status = $7,
+      electronic = $8,
+      credit_card_receivable = $9,
+      third_party_custodian = $10,
+      created_at = $11::timestamptz,
+      withdrawn_at = $12::timestamptz,
+      collateral_data = $13::jsonb,
+      updated_at = NOW()
+  WHERE institution_key = $1 AND collateral_id = $2
+`;
 const INSERT_AUDIT_EVENT = `
   INSERT INTO filing_office_audit_events (
     institution_key, event_id, actor_id, operation, target_id, occurred_at,
@@ -103,24 +130,16 @@ export class DatabaseStateRepository {
         await this.insertState(client, validated);
         await this.insertDocuments(client, indexed(validated.documents));
         await this.insertPackages(client, indexed(validated.packages));
+        await this.insertCollateral(client, indexed(validated.collateral));
         await this.insertAuditEvents(client, validated.audit);
         await this.insertDocumentVersions(client, flattenDocumentVersions(validated.documents));
         return;
       }
 
       const persisted = await this.readHydratedState(client, current.state);
-      const documentChanges = reconcileCollection(
-        persisted.documents,
-        validated.documents,
-        "DOCUMENT",
-        withoutVersions,
-      );
-      const packageChanges = reconcileCollection(
-        persisted.packages,
-        validated.packages,
-        "PACKAGE",
-        identity,
-      );
+      const documentChanges = reconcileCollection(persisted.documents, validated.documents, "DOCUMENT", withoutVersions);
+      const packageChanges = reconcileCollection(persisted.packages, validated.packages, "PACKAGE", identity);
+      const collateralChanges = reconcileCollection(persisted.collateral, validated.collateral, "COLLATERAL", identity);
       const appendedAudit = assertAppendOnlyAudit(persisted.audit, validated.audit);
       const appendedVersions = assertAppendOnlyDocumentVersions(persisted.documents, validated.documents);
 
@@ -129,6 +148,8 @@ export class DatabaseStateRepository {
       await this.updateDocuments(client, documentChanges.updated);
       await this.insertPackages(client, packageChanges.inserted);
       await this.updatePackages(client, packageChanges.updated);
+      await this.insertCollateral(client, collateralChanges.inserted);
+      await this.updateCollateral(client, collateralChanges.updated);
       await this.insertAuditEvents(client, appendedAudit);
       await this.insertDocumentVersions(client, appendedVersions);
     });
@@ -141,12 +162,14 @@ export class DatabaseStateRepository {
       let existingAudit = [];
       let existingDocuments = [];
       let existingPackages = [];
+      let existingCollateral = [];
 
       if (current) {
         state = await this.readHydratedState(client, current.state);
         existingAudit = structuredClone(state.audit);
         existingDocuments = structuredClone(state.documents);
         existingPackages = structuredClone(state.packages);
+        existingCollateral = structuredClone(state.collateral);
       } else if (this.allowInitialState) {
         state = this.createInitialState();
       } else {
@@ -157,6 +180,7 @@ export class DatabaseStateRepository {
       const validated = this.validate(state);
       const documentChanges = reconcileCollection(existingDocuments, validated.documents, "DOCUMENT", withoutVersions);
       const packageChanges = reconcileCollection(existingPackages, validated.packages, "PACKAGE", identity);
+      const collateralChanges = reconcileCollection(existingCollateral, validated.collateral, "COLLATERAL", identity);
       const appendedAudit = assertAppendOnlyAudit(existingAudit, validated.audit);
       const appendedVersions = assertAppendOnlyDocumentVersions(existingDocuments, validated.documents);
 
@@ -166,6 +190,8 @@ export class DatabaseStateRepository {
       await this.updateDocuments(client, documentChanges.updated);
       await this.insertPackages(client, packageChanges.inserted);
       await this.updatePackages(client, packageChanges.updated);
+      await this.insertCollateral(client, collateralChanges.inserted);
+      await this.updateCollateral(client, collateralChanges.updated);
       await this.insertAuditEvents(client, appendedAudit);
       await this.insertDocumentVersions(client, appendedVersions);
       return result;
@@ -178,9 +204,10 @@ export class DatabaseStateRepository {
   }
 
   async readHydratedState(client, storedState) {
-    const [documentResult, packageResult, auditResult, versionResult] = await Promise.all([
+    const [documentResult, packageResult, collateralResult, auditResult, versionResult] = await Promise.all([
       client.query(SELECT_DOCUMENTS, [this.institutionKey]),
       client.query(SELECT_PACKAGES, [this.institutionKey]),
+      client.query(SELECT_COLLATERAL, [this.institutionKey]),
       client.query(SELECT_AUDIT, [this.institutionKey]),
       client.query(SELECT_DOCUMENT_VERSIONS, [this.institutionKey]),
     ]);
@@ -197,6 +224,7 @@ export class DatabaseStateRepository {
         versions: versionsByDocument.get(row.document_id) ?? [],
       })),
       packages: packageResult.rows.map((row) => row.package_data),
+      collateral: collateralResult.rows.map((row) => row.collateral_data),
       audit: auditResult.rows.map((row) => row.event),
     });
   }
@@ -251,6 +279,24 @@ export class DatabaseStateRepository {
     }
   }
 
+  async insertCollateral(client, entries) {
+    for (const entry of entries) {
+      try {
+        await client.query(INSERT_COLLATERAL, collateralValues(this.institutionKey, entry));
+      } catch (error) {
+        if (isUniqueViolation(error)) throw new Error("COLLATERAL_CONFLICT");
+        throw error;
+      }
+    }
+  }
+
+  async updateCollateral(client, entries) {
+    for (const entry of entries) {
+      const result = await client.query(UPDATE_COLLATERAL, collateralValues(this.institutionKey, entry));
+      if ((result.rowCount ?? result.rows.length) !== 1) throw new Error("COLLATERAL_WRITE_CONFLICT");
+    }
+  }
+
   async insertAuditEvents(client, events) {
     for (const event of events) {
       try {
@@ -283,7 +329,7 @@ export class DatabaseStateRepository {
 }
 
 function withoutNormalizedCollections(state) {
-  return { ...state, audit: [], documents: [], packages: [] };
+  return { ...state, audit: [], documents: [], packages: [], collateral: [] };
 }
 
 function indexed(items) {
@@ -302,16 +348,19 @@ function documentValues(institutionKey, { item: document, index }) {
 
 function packageValues(institutionKey, { item: packageItem, index }) {
   return [
-    institutionKey,
-    packageItem.id,
-    index,
-    packageItem.ownerType,
-    packageItem.ownerId,
-    packageItem.type,
-    packageItem.status,
-    packageItem.completionPercentage,
-    packageItem.returnReason ?? null,
-    JSON.stringify(packageItem),
+    institutionKey, packageItem.id, index, packageItem.ownerType, packageItem.ownerId,
+    packageItem.type, packageItem.status, packageItem.completionPercentage,
+    packageItem.returnReason ?? null, JSON.stringify(packageItem),
+  ];
+}
+
+function collateralValues(institutionKey, { item: collateral, index }) {
+  return [
+    institutionKey, collateral.id, index, collateral.institutionId,
+    collateral.description, collateral.amount, collateral.status,
+    collateral.electronic, collateral.creditCardReceivable,
+    collateral.thirdPartyCustodian, collateral.createdAt,
+    collateral.withdrawnAt ?? null, JSON.stringify(collateral),
   ];
 }
 
