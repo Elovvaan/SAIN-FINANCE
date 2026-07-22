@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireOperator } from "@/server/auth/operator-session";
-import { runFilingOfficeOperation } from "@/server/finance/filing-office";
+import { runFilingOfficeOperation } from "@/server/finance/filing-office-service";
 
 export const runtime = "nodejs";
 const MAX_BODY_BYTES = 256_000;
