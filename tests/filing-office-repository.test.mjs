@@ -6,7 +6,7 @@ import os from "node:os";
 import {
   InMemoryStateRepository,
   JsonFileStateRepository,
-} from "../src/server/finance/filing-office-repository.ts";
+} from "../src/server/finance/filing-office-repository.js";
 
 function validateState(value) {
   if (!value || typeof value !== "object" || value.schemaVersion !== 1) {
