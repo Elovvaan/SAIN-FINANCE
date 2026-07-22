@@ -3,12 +3,21 @@ import { PostgresDatabase } from "../finance/postgres-database";
 
 const PASSWORD_KEY_LENGTH = 64;
 const SCRYPT_PARAMETERS = { N: 16_384, r: 8, p: 1 };
+const MANAGED_USER_STATUSES = new Set(["ACTIVE", "SUSPENDED", "DISABLED"]);
 
 export type CreateOperatorUserInput = {
   institutionKey: string;
   email: string;
   displayName?: string;
   temporaryPassword: string;
+  actorUserId: string;
+};
+
+export type UpdateOperatorUserStatusInput = {
+  institutionKey: string;
+  targetUserId: string;
+  status: string;
+  reason?: string;
   actorUserId: string;
 };
 
@@ -19,6 +28,13 @@ type UserListRow = {
   status: string;
   email_verified_at: Date | string | null;
   created_at: Date | string;
+};
+
+type ManagedUserRow = {
+  user_id: string;
+  email: string;
+  display_name: string | null;
+  status: string;
 };
 
 function normalizeEmail(email: string) {
@@ -159,5 +175,75 @@ export async function listOperatorUsers(institutionKey: string, actorUserId: str
       emailVerifiedAt: row.email_verified_at ? new Date(row.email_verified_at).toISOString() : undefined,
       createdAt: new Date(row.created_at).toISOString(),
     }));
+  });
+}
+
+export async function updateOperatorUserStatus(input: UpdateOperatorUserStatusInput) {
+  const status = input.status.trim().toUpperCase();
+  const reason = input.reason?.trim() || undefined;
+  if (!input.targetUserId.trim()) throw new Error("TARGET_USER_REQUIRED");
+  if (!MANAGED_USER_STATUSES.has(status)) throw new Error("INVALID_USER_STATUS");
+  if (input.targetUserId === input.actorUserId) throw new Error("SELF_STATUS_CHANGE_NOT_ALLOWED");
+  if (status !== "ACTIVE" && !reason) throw new Error("STATUS_CHANGE_REASON_REQUIRED");
+
+  const database = new PostgresDatabase();
+  return database.transaction(async (client) => {
+    await assertInstitutionAdministrator(client, input.institutionKey, input.actorUserId);
+
+    const result = await client.query<ManagedUserRow>(
+      `SELECT user_id, email, display_name, status
+       FROM users
+       WHERE institution_key = $1 AND user_id = $2
+       FOR UPDATE`,
+      [input.institutionKey, input.targetUserId],
+    );
+    const user = result.rows[0];
+    if (!user) throw new Error("USER_NOT_FOUND");
+    if (user.status === status) throw new Error("USER_STATUS_UNCHANGED");
+
+    await client.query(
+      `UPDATE users
+       SET status = $3,
+           suspended_at = CASE WHEN $3 = 'SUSPENDED' THEN NOW() ELSE NULL END,
+           suspended_reason = CASE WHEN $3 = 'SUSPENDED' THEN $4 ELSE NULL END,
+           metadata = metadata || $5::jsonb,
+           updated_at = NOW()
+       WHERE institution_key = $1 AND user_id = $2`,
+      [
+        input.institutionKey,
+        input.targetUserId,
+        status,
+        reason ?? null,
+        JSON.stringify({
+          lastStatusChange: {
+            previousStatus: user.status,
+            resultingStatus: status,
+            reason: reason ?? null,
+            actorUserId: input.actorUserId,
+            changedAt: new Date().toISOString(),
+          },
+        }),
+      ],
+    );
+
+    if (status !== "ACTIVE") {
+      await client.query(
+        `UPDATE sessions
+         SET status = 'REVOKED', revoked_at = NOW(), revoked_by = $3,
+             revoke_reason = 'ACCOUNT_STATUS_CHANGED', updated_at = NOW()
+         WHERE institution_key = $1 AND user_id = $2 AND status = 'ACTIVE'`,
+        [input.institutionKey, input.targetUserId, input.actorUserId],
+      );
+    }
+
+    return {
+      userId: user.user_id,
+      email: user.email,
+      displayName: user.display_name ?? undefined,
+      previousStatus: user.status,
+      status,
+      reason,
+      sessionsRevoked: status !== "ACTIVE",
+    };
   });
 }
