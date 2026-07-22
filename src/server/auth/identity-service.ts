@@ -37,6 +37,17 @@ type UserRow = {
   locked_until: Date | string | null;
 };
 
+type SessionRow = {
+  session_id: string;
+  user_id: string;
+  institution_key: string;
+  issued_at: Date | string;
+  expires_at: Date | string;
+  email: string;
+  display_name: string | null;
+  user_status: string;
+};
+
 function institutionKey() {
   return process.env.SAIN_INSTITUTION_KEY?.trim() || "sain-finance";
 }
@@ -311,7 +322,7 @@ export async function verifyOperatorToken(token: string | undefined): Promise<Au
        FOR UPDATE`,
       [tokenHash(token)],
     );
-    const row = result.rows[0];
+    const row = result.rows[0] as SessionRow | undefined;
     if (!row || row.user_status !== "ACTIVE") return null;
 
     const authorization = await loadRolesAndPermissions(client, row.user_id);
@@ -332,7 +343,7 @@ export async function verifyOperatorToken(token: string | undefined): Promise<Au
       permissions: authorization.permissions,
       issuedAt: Math.floor(new Date(row.issued_at).getTime() / 1000),
       expiresAt: Math.floor(new Date(row.expires_at).getTime() / 1000),
-    };
+    } satisfies AuthenticatedOperator;
   });
 }
 
