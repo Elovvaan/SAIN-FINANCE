@@ -27,6 +27,25 @@ type JobRow = {
   updated_at: string;
 };
 
+type ApplicantRow = {
+  application_id: string;
+  job_id: string;
+  job_title: string;
+  status: string;
+  cover_note: string | null;
+  resume_filename: string;
+  resume_media_type: string;
+  resume_byte_length: number;
+  submitted_at: string;
+  updated_at: string;
+  career_profile_id: string;
+  email: string;
+  full_name: string;
+  career_stage: string;
+  current_role: string;
+  applicant_location: string;
+};
+
 function required(value: unknown, code: string) {
   const normalized = String(value ?? "").trim();
   if (!normalized) throw new Error(code);
@@ -35,10 +54,10 @@ function required(value: unknown, code: string) {
 
 function jsonError(error: unknown) {
   const code = error instanceof Error ? error.message : "EMPLOYER_WORKSPACE_UNAVAILABLE";
-  if (code.endsWith("_REQUIRED") || code === "INVALID_JOB_STATUS") {
+  if (code.endsWith("_REQUIRED") || code === "INVALID_JOB_STATUS" || code === "INVALID_APPLICATION_STATUS") {
     return NextResponse.json({ error: code }, { status: 400 });
   }
-  if (code === "EMPLOYER_NOT_FOUND" || code === "JOB_NOT_FOUND") {
+  if (code === "EMPLOYER_NOT_FOUND" || code === "JOB_NOT_FOUND" || code === "APPLICATION_NOT_FOUND") {
     return NextResponse.json({ error: code }, { status: 404 });
   }
   console.error("EMPLOYER_WORKSPACE_REQUEST_FAILED", error);
@@ -55,12 +74,26 @@ export async function GET(request: NextRequest) {
         [businessEmail],
       );
       const employer = employerResult.rows[0];
-      if (!employer) return { employer: null, jobs: [] as JobRow[] };
+      if (!employer) return { employer: null, jobs: [] as JobRow[], applicants: [] as ApplicantRow[] };
+
       const jobsResult = await client.query<JobRow>(
         `SELECT * FROM employer_jobs WHERE employer_id = $1 ORDER BY created_at DESC`,
         [employer.employer_id],
       );
-      return { employer, jobs: jobsResult.rows };
+      const applicantsResult = await client.query<ApplicantRow>(
+        `SELECT a.application_id, a.job_id, j.title AS job_title, a.status,
+                a.cover_note, a.resume_filename, a.resume_media_type,
+                a.resume_byte_length, a.submitted_at, a.updated_at,
+                p.career_profile_id, p.email, p.full_name, p.career_stage,
+                p."current_role" AS current_role, p.location AS applicant_location
+         FROM job_applications a
+         JOIN employer_jobs j ON j.job_id = a.job_id
+         JOIN career_profiles p ON p.career_profile_id = a.career_profile_id
+         WHERE j.employer_id = $1
+         ORDER BY a.submitted_at DESC`,
+        [employer.employer_id],
+      );
+      return { employer, jobs: jobsResult.rows, applicants: applicantsResult.rows };
     });
     return NextResponse.json(result);
   } catch (error) {
@@ -104,7 +137,7 @@ export async function POST(request: NextRequest) {
       const employmentType = required(body.employmentType, "EMPLOYMENT_TYPE_REQUIRED");
       const description = required(body.description, "JOB_DESCRIPTION_REQUIRED");
       const status = String(body.status ?? "DRAFT").toUpperCase();
-      if (!['DRAFT', 'PUBLISHED'].includes(status)) throw new Error("INVALID_JOB_STATUS");
+      if (!["DRAFT", "PUBLISHED"].includes(status)) throw new Error("INVALID_JOB_STATUS");
 
       const job = await database.transaction(async (client) => {
         const employerResult = await client.query<{ employer_id: string }>(
@@ -134,20 +167,56 @@ export async function POST(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const body = (await request.json()) as Record<string, unknown>;
-    const jobId = required(body.jobId, "JOB_ID_REQUIRED");
-    const status = required(body.status, "JOB_STATUS_REQUIRED").toUpperCase();
-    if (!['DRAFT', 'PUBLISHED', 'CLOSED'].includes(status)) throw new Error("INVALID_JOB_STATUS");
-
+    const action = required(body.action, "ACTION_REQUIRED");
     const database = new PostgresDatabase();
-    const job = await database.transaction(async (client) => {
-      const result = await client.query<JobRow>(
-        `UPDATE employer_jobs SET status = $2, updated_at = NOW() WHERE job_id = $1 RETURNING *`,
-        [jobId, status],
-      );
-      if (!result.rows[0]) throw new Error("JOB_NOT_FOUND");
-      return result.rows[0];
-    });
-    return NextResponse.json({ job });
+
+    if (action === "updateJobStatus") {
+      const jobId = required(body.jobId, "JOB_ID_REQUIRED");
+      const status = required(body.status, "JOB_STATUS_REQUIRED").toUpperCase();
+      if (!["DRAFT", "PUBLISHED", "CLOSED"].includes(status)) throw new Error("INVALID_JOB_STATUS");
+      const job = await database.transaction(async (client) => {
+        const result = await client.query<JobRow>(
+          `UPDATE employer_jobs SET status = $2, updated_at = NOW() WHERE job_id = $1 RETURNING *`,
+          [jobId, status],
+        );
+        if (!result.rows[0]) throw new Error("JOB_NOT_FOUND");
+        return result.rows[0];
+      });
+      return NextResponse.json({ job });
+    }
+
+    if (action === "updateApplicationStatus") {
+      const businessEmail = required(body.businessEmail, "BUSINESS_EMAIL_REQUIRED").toLowerCase();
+      const applicationId = required(body.applicationId, "APPLICATION_ID_REQUIRED");
+      const status = required(body.status, "APPLICATION_STATUS_REQUIRED").toUpperCase();
+      if (!["SUBMITTED", "IN_REVIEW", "INTERVIEW", "OFFERED", "REJECTED"].includes(status)) {
+        throw new Error("INVALID_APPLICATION_STATUS");
+      }
+      const application = await database.transaction(async (client) => {
+        const result = await client.query<ApplicantRow>(
+          `UPDATE job_applications a
+           SET status = $3, updated_at = NOW()
+           FROM employer_jobs j, employer_profiles e, career_profiles p
+           WHERE a.application_id = $1
+             AND a.job_id = j.job_id
+             AND j.employer_id = e.employer_id
+             AND e.business_email = $2
+             AND a.career_profile_id = p.career_profile_id
+             AND a.status <> 'WITHDRAWN'
+           RETURNING a.application_id, a.job_id, j.title AS job_title, a.status,
+                     a.cover_note, a.resume_filename, a.resume_media_type,
+                     a.resume_byte_length, a.submitted_at, a.updated_at,
+                     p.career_profile_id, p.email, p.full_name, p.career_stage,
+                     p."current_role" AS current_role, p.location AS applicant_location`,
+          [applicationId, businessEmail, status],
+        );
+        if (!result.rows[0]) throw new Error("APPLICATION_NOT_FOUND");
+        return result.rows[0];
+      });
+      return NextResponse.json({ application });
+    }
+
+    throw new Error("ACTION_REQUIRED");
   } catch (error) {
     return jsonError(error);
   }
