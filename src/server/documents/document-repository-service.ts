@@ -67,7 +67,6 @@ export async function uploadDocumentVersion(input: UploadDocumentInput) {
 
     const digest = checksum(input.content);
     const byteLength = input.content.byteLength;
-    let blobId: string = randomUUID();
     const existingBlob = await client.query<{ blob_id: string }>(
       `SELECT blob_id FROM repository_document_blobs
        WHERE institution_key = $1 AND checksum_sha256 = $2 AND byte_length = $3
@@ -75,9 +74,10 @@ export async function uploadDocumentVersion(input: UploadDocumentInput) {
       [input.operator.institutionKey, digest, byteLength],
     );
 
-    if (existingBlob.rows[0]) {
-      blobId = existingBlob.rows[0].blob_id;
-    } else {
+    const existingBlobId = existingBlob.rows[0]?.blob_id;
+    const blobId: string = existingBlobId ?? randomUUID();
+
+    if (!existingBlobId) {
       await client.query(
         `INSERT INTO repository_document_blobs (
            blob_id, institution_key, content, byte_length, checksum_sha256
