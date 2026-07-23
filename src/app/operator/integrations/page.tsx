@@ -46,6 +46,13 @@ export default function IntegrationsPage() {
   }
 
   const summary = workspace.summary || {};
+  const summaryCards: Array<[string, unknown]> = [
+    ["Active providers", summary.active_providers],
+    ["Degraded connections", summary.degraded_connections],
+    ["Job exceptions", summary.job_exceptions],
+    ["Failed webhooks", summary.failed_webhooks],
+    ["Reconciliation exceptions", summary.reconciliation_exceptions],
+  ];
 
   return (
     <main style={{ padding: 24, display: "grid", gap: 24 }}>
@@ -56,13 +63,7 @@ export default function IntegrationsPage() {
       </header>
 
       <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 12 }}>
-        {[
-          ["Active providers", summary.active_providers],
-          ["Degraded connections", summary.degraded_connections],
-          ["Job exceptions", summary.job_exceptions],
-          ["Failed webhooks", summary.failed_webhooks],
-          ["Reconciliation exceptions", summary.reconciliation_exceptions],
-        ].map(([label, value]) => <article key={String(label)} style={{ border: "1px solid #ddd", padding: 16, borderRadius: 8 }}><small>{label}</small><h2>{String(value ?? 0)}</h2></article>)}
+        {summaryCards.map(([label, value]) => <article key={label} style={{ border: "1px solid #ddd", padding: 16, borderRadius: 8 }}><small>{label}</small><h2>{String(value ?? 0)}</h2></article>)}
       </section>
 
       <section>
