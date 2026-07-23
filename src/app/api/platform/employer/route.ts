@@ -4,6 +4,16 @@ import { PostgresDatabase } from "@/server/finance/postgres-database";
 
 export const runtime = "nodejs";
 
+const applicationStatuses = new Set([
+  "SUBMITTED",
+  "IN_REVIEW",
+  "INTERVIEW",
+  "OFFERED",
+  "HIRED",
+  "REJECTED",
+  "WITHDRAWN",
+]);
+
 type EmployerRow = {
   employer_id: string;
   company_name: string;
@@ -189,9 +199,7 @@ export async function PATCH(request: NextRequest) {
       const businessEmail = required(body.businessEmail, "BUSINESS_EMAIL_REQUIRED").toLowerCase();
       const applicationId = required(body.applicationId, "APPLICATION_ID_REQUIRED");
       const status = required(body.status, "APPLICATION_STATUS_REQUIRED").toUpperCase();
-      if (!["SUBMITTED", "IN_REVIEW", "INTERVIEW", "OFFERED", "REJECTED"].includes(status)) {
-        throw new Error("INVALID_APPLICATION_STATUS");
-      }
+      if (!applicationStatuses.has(status) || status === "WITHDRAWN") throw new Error("INVALID_APPLICATION_STATUS");
       const application = await database.transaction(async (client) => {
         const result = await client.query<ApplicantRow>(
           `UPDATE job_applications a
@@ -202,7 +210,7 @@ export async function PATCH(request: NextRequest) {
              AND j.employer_id = e.employer_id
              AND e.business_email = $2
              AND a.career_profile_id = p.career_profile_id
-             AND a.status <> 'WITHDRAWN'
+             AND a.status NOT IN ('WITHDRAWN', 'HIRED')
            RETURNING a.application_id, a.job_id, j.title AS job_title, a.status,
                      a.cover_note, a.resume_filename, a.resume_media_type,
                      a.resume_byte_length, a.submitted_at, a.updated_at,
