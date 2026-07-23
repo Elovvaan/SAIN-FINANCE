@@ -101,8 +101,8 @@ const platformCards = [
   },
   {
     icon: Layers3,
-    title: "Future-ready infrastructure",
-    copy: "A foundation built to support employer, payroll, banking, and fintech collaboration over time.",
+    title: "Enterprise financial infrastructure",
+    copy: "Infrastructure connecting employer, payroll, banking, compliance, reporting, analytics, security, and financial operations.",
   },
 ];
 
@@ -124,8 +124,8 @@ const partnerCards = [
     copy: "The kernel is the system of record and the decision path that governs how account state may change.",
   },
   {
-    title: "Future Collaboration",
-    copy: "SAIN is preparing for thoughtful partnerships across payroll, sponsor banking, banking-as-a-service, and financial infrastructure.",
+    title: "Financial Collaboration",
+    copy: "SAIN supports partnerships across payroll, sponsor banking, banking-as-a-service, and financial infrastructure.",
   },
 ];
 
@@ -178,7 +178,7 @@ const platformWorkspaces = [
   "Career OS",
   "Employer OS",
   "Staffing OS",
-  "Financial OS (Coming Soon)",
+  "Financial OS",
   "Partner Center",
   "Admin Console",
 ];
