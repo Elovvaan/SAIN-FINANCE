@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 
 type Definition = {
   workflow_definition_id: string;
@@ -254,7 +254,7 @@ function Metric({ label, value }: { label: string; value: number }) {
   return <div style={panelStyle}><div style={{ fontSize: 28, fontWeight: 700 }}>{value}</div><div style={{ opacity: 0.7 }}>{label}</div></div>;
 }
 
-function Table({ columns, rows }: { columns: string[]; rows: Array<Array<string | JSX.Element>> }) {
+function Table({ columns, rows }: { columns: string[]; rows: Array<Array<ReactNode>> }) {
   return (
     <div style={{ overflowX: "auto" }}>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
