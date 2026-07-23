@@ -7,6 +7,16 @@ export const runtime = "nodejs";
 const placementStatuses = new Set(["NEW", "MATCHED", "SCREENING", "SUBMITTED", "INTERVIEW", "OFFERED", "PLACED", "CLOSED"]);
 const applicationStatuses = new Set(["SUBMITTED", "IN_REVIEW", "INTERVIEW", "OFFERED", "HIRED", "REJECTED"]);
 
+const allowedTransitions: Record<string, Set<string>> = {
+  SUBMITTED: new Set(["IN_REVIEW", "INTERVIEW", "REJECTED"]),
+  IN_REVIEW: new Set(["INTERVIEW", "OFFERED", "REJECTED"]),
+  INTERVIEW: new Set(["OFFERED", "REJECTED"]),
+  OFFERED: new Set(["HIRED", "REJECTED"]),
+  HIRED: new Set(),
+  REJECTED: new Set(),
+  WITHDRAWN: new Set(),
+};
+
 function required(value: unknown, code: string) {
   const normalized = String(value ?? "").trim();
   if (!normalized) throw new Error(code);
@@ -18,7 +28,8 @@ function jsonError(error: unknown) {
   if (
     code.endsWith("_REQUIRED") ||
     code === "INVALID_PLACEMENT_STATUS" ||
-    code === "INVALID_APPLICATION_STATUS"
+    code === "INVALID_APPLICATION_STATUS" ||
+    code === "INVALID_APPLICATION_TRANSITION"
   ) {
     return NextResponse.json({ error: code }, { status: 400 });
   }
@@ -124,19 +135,38 @@ export async function PATCH(request: NextRequest) {
     const database = new PostgresDatabase();
 
     if (action === "updateApplicationStatus") {
+      const businessEmail = required(body.businessEmail, "BUSINESS_EMAIL_REQUIRED").toLowerCase();
       const applicationId = required(body.applicationId, "APPLICATION_ID_REQUIRED");
       const status = required(body.status, "APPLICATION_STATUS_REQUIRED").toUpperCase();
       if (!applicationStatuses.has(status)) throw new Error("INVALID_APPLICATION_STATUS");
       const application = await database.transaction(async (client) => {
+        const profileResult = await client.query<{ staffing_profile_id: string }>(
+          `SELECT staffing_profile_id FROM staffing_profiles WHERE business_email = $1 LIMIT 1`,
+          [businessEmail],
+        );
+        if (!profileResult.rows[0]) throw new Error("STAFFING_PROFILE_NOT_FOUND");
+        const currentResult = await client.query<{ status: string }>(
+          `SELECT status FROM job_applications WHERE application_id = $1 LIMIT 1`,
+          [applicationId],
+        );
+        const previousStatus = currentResult.rows[0]?.status;
+        if (!previousStatus) throw new Error("APPLICATION_NOT_FOUND");
+        if (!allowedTransitions[previousStatus]?.has(status)) throw new Error("INVALID_APPLICATION_TRANSITION");
         const result = await client.query(`
           UPDATE job_applications
           SET status = $2, updated_at = NOW()
           WHERE application_id = $1
-            AND status NOT IN ('WITHDRAWN', 'HIRED')
           RETURNING *
         `, [applicationId, status]);
-        if (!result.rows[0]) throw new Error("APPLICATION_NOT_FOUND");
-        return result.rows[0];
+        const updated = result.rows[0];
+        if (!updated) throw new Error("APPLICATION_NOT_FOUND");
+        await client.query(
+          `INSERT INTO application_status_events (
+             status_event_id, application_id, previous_status, new_status, actor_workspace, actor_identifier
+           ) VALUES ($1, $2, $3, $4, 'STAFFING', $5)`,
+          [randomUUID(), applicationId, previousStatus, status, businessEmail],
+        );
+        return updated;
       });
       return NextResponse.json({ application });
     }
