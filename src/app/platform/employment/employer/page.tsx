@@ -1,12 +1,17 @@
 import type { Metadata } from "next";
+import { AuthenticatedWorkspaceGate } from "../_components/authenticated-workspace-gate";
 import { EmployerWorkspacePage } from "../_components/role-scoped-workspaces";
 
 export const metadata: Metadata = {
   title: "SAIN - Employer Workspace",
   description:
-    "Role-scoped employer dashboard for workforce, payroll, funding, disbursements, corrections, reports, and settings.",
+    "Authenticated employer dashboard for workforce, payroll, funding, disbursements, corrections, and settings.",
 };
 
 export default function EmployerWorkspaceRoute() {
-  return <EmployerWorkspacePage />;
+  return (
+    <AuthenticatedWorkspaceGate workspace="employer">
+      <EmployerWorkspacePage />
+    </AuthenticatedWorkspaceGate>
+  );
 }
