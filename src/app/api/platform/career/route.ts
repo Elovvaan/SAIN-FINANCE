@@ -92,7 +92,7 @@ export async function GET(request: NextRequest) {
          WHERE j.status = 'PUBLISHED'
          ORDER BY j.created_at DESC`,
       );
-      if (!profile) return { profile: null, jobs: jobsResult.rows, applications: [] as ApplicationRow[] };
+      if (!profile) return { profile: null, jobs: jobsResult.rows, applications: [] as ApplicationRow[], timeline: [] };
       const applicationsResult = await client.query<ApplicationRow>(
         `SELECT a.application_id, a.job_id, a.status, a.cover_note,
                 a.resume_filename, a.resume_media_type, a.resume_byte_length,
@@ -104,7 +104,16 @@ export async function GET(request: NextRequest) {
          ORDER BY a.submitted_at DESC`,
         [profile.career_profile_id],
       );
-      return { profile, jobs: jobsResult.rows, applications: applicationsResult.rows };
+      const timelineResult = await client.query(
+        `SELECT t.*
+         FROM application_timeline_events t
+         JOIN job_applications a ON a.application_id = t.application_id
+         WHERE a.career_profile_id = $1
+           AND t.visibility IN ('SHARED', 'APPLICANT')
+         ORDER BY t.created_at DESC`,
+        [profile.career_profile_id],
+      );
+      return { profile, jobs: jobsResult.rows, applications: applicationsResult.rows, timeline: timelineResult.rows };
     });
     return NextResponse.json(result);
   } catch (error) {
@@ -162,11 +171,26 @@ export async function POST(request: NextRequest) {
           [randomUUID(), jobId, careerProfileId, coverNote || null, resume.name, resume.type, content, resume.size],
         );
         const created = result.rows[0];
+        const statusEventId = randomUUID();
         await client.query(
           `INSERT INTO application_status_events (
              status_event_id, application_id, previous_status, new_status, actor_workspace, actor_identifier
            ) VALUES ($1, $2, NULL, 'SUBMITTED', 'CAREER', $3)`,
-          [randomUUID(), created.application_id, email],
+          [statusEventId, created.application_id, email],
+        );
+        await client.query(
+          `INSERT INTO application_timeline_events (
+             timeline_event_id, application_id, event_type, actor_workspace, actor_identifier,
+             visibility, title, body, metadata
+           ) VALUES ($1, $2, 'STATUS', 'CAREER', $3, 'SHARED', $4, $5, $6::jsonb)`,
+          [
+            randomUUID(),
+            created.application_id,
+            email,
+            "Application submitted",
+            "Application moved to SUBMITTED",
+            JSON.stringify({ previousStatus: null, newStatus: "SUBMITTED", sourceEventId: statusEventId }),
+          ],
         );
         return created;
       });
@@ -236,11 +260,26 @@ export async function PATCH(request: NextRequest) {
       );
       const updated = result.rows[0];
       if (!updated) throw new Error("APPLICATION_NOT_FOUND");
+      const statusEventId = randomUUID();
       await client.query(
         `INSERT INTO application_status_events (
            status_event_id, application_id, previous_status, new_status, actor_workspace, actor_identifier
          ) VALUES ($1, $2, $3, 'WITHDRAWN', 'CAREER', $4)`,
-        [randomUUID(), applicationId, previousStatus, email],
+        [statusEventId, applicationId, previousStatus, email],
+      );
+      await client.query(
+        `INSERT INTO application_timeline_events (
+           timeline_event_id, application_id, event_type, actor_workspace, actor_identifier,
+           visibility, title, body, metadata
+         ) VALUES ($1, $2, 'STATUS', 'CAREER', $3, 'SHARED', $4, $5, $6::jsonb)`,
+        [
+          randomUUID(),
+          applicationId,
+          email,
+          "Application withdrawn",
+          `Application moved from ${previousStatus} to WITHDRAWN`,
+          JSON.stringify({ previousStatus, newStatus: "WITHDRAWN", sourceEventId: statusEventId }),
+        ],
       );
       return updated;
     });
