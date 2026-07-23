@@ -6,6 +6,7 @@ import {
   Eye,
   FileArchive,
   FileText,
+  History,
   Loader2,
   Lock,
   Plus,
@@ -13,6 +14,7 @@ import {
   Search,
   ShieldCheck,
   Upload,
+  X,
 } from "lucide-react";
 
 type RepositoryDocument = {
@@ -32,6 +34,20 @@ type RepositoryDocument = {
   signed_at: string | null;
 };
 
+type DocumentEvent = {
+  event_id: string;
+  document_version_id: string | null;
+  event_type: string;
+  actor_user_id: string;
+  occurred_at: string;
+  source_ip: string | null;
+  user_agent: string | null;
+  metadata: Record<string, unknown> | null;
+  version_number: number | null;
+  original_filename: string | null;
+  checksum_sha256: string | null;
+};
+
 type ApiError = { error?: string };
 
 function formatBytes(value: string | number | null) {
@@ -47,6 +63,17 @@ function formatDate(value: string) {
   return Number.isNaN(date.getTime()) ? "Unknown" : date.toLocaleString();
 }
 
+function eventLabel(eventType: string) {
+  const labels: Record<string, string> = {
+    DOCUMENT_CREATED: "Document created",
+    VERSION_UPLOADED: "New version uploaded",
+    VERSION_FROZEN: "Version frozen",
+    DOCUMENT_PREVIEWED: "Document previewed",
+    DOCUMENT_DOWNLOADED: "Document downloaded",
+  };
+  return labels[eventType] || eventType.replaceAll("_", " ").toLowerCase();
+}
+
 function readableError(code: string | undefined) {
   const messages: Record<string, string> = {
     AUTHENTICATION_REQUIRED: "Your operator session has expired. Sign in again.",
@@ -55,6 +82,7 @@ function readableError(code: string | undefined) {
     DOCUMENT_FILE_TOO_LARGE: "The selected file exceeds the repository upload limit.",
     DOCUMENT_TITLE_REQUIRED: "Enter a document title.",
     DOCUMENT_TYPE_REQUIRED: "Enter a document type.",
+    DOCUMENT_NOT_FOUND: "The requested document was not found.",
     DOCUMENT_VERSION_NOT_FOUND: "The requested document version was not found.",
     DOCUMENT_INTEGRITY_FAILURE: "The stored document failed its checksum verification.",
     DOCUMENT_REPOSITORY_UNAVAILABLE: "The document repository is temporarily unavailable.",
@@ -71,14 +99,15 @@ export default function OperatorDocumentsPage() {
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showUpload, setShowUpload] = useState(false);
+  const [historyDocument, setHistoryDocument] = useState<RepositoryDocument | null>(null);
+  const [events, setEvents] = useState<DocumentEvent[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const loadDocuments = useCallback(async (search = "") => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`/api/operator/documents?q=${encodeURIComponent(search)}`, {
-        cache: "no-store",
-      });
+      const response = await fetch(`/api/operator/documents?q=${encodeURIComponent(search)}`, { cache: "no-store" });
       const body = (await response.json()) as { documents?: RepositoryDocument[] } & ApiError;
       if (response.status === 401) {
         window.location.assign("/operator/login");
@@ -153,10 +182,32 @@ export default function OperatorDocumentsPage() {
       if (!response.ok) throw new Error(body.error || "DOCUMENT_REPOSITORY_UNAVAILABLE");
       setNotice(`Version ${document.current_version} of ${document.title} is now frozen.`);
       await loadDocuments(query);
+      if (historyDocument?.document_id === document.document_id) await openHistory(document);
     } catch (requestError) {
       setError(readableError(requestError instanceof Error ? requestError.message : undefined));
     } finally {
       setFreezingId(null);
+    }
+  }
+
+  async function openHistory(document: RepositoryDocument) {
+    setHistoryDocument(document);
+    setHistoryLoading(true);
+    setEvents([]);
+    setError(null);
+    try {
+      const response = await fetch(`/api/operator/documents/${document.document_id}/events`, { cache: "no-store" });
+      const body = (await response.json()) as { events?: DocumentEvent[] } & ApiError;
+      if (response.status === 401) {
+        window.location.assign("/operator/login");
+        return;
+      }
+      if (!response.ok) throw new Error(body.error || "DOCUMENT_REPOSITORY_UNAVAILABLE");
+      setEvents(body.events || []);
+    } catch (requestError) {
+      setError(readableError(requestError instanceof Error ? requestError.message : undefined));
+    } finally {
+      setHistoryLoading(false);
     }
   }
 
@@ -197,12 +248,7 @@ export default function OperatorDocumentsPage() {
             <form onSubmit={submitSearch} className="flex w-full max-w-xl gap-2">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500" />
-                <input
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Search title, description, or document type"
-                  className="h-11 w-full border border-white/10 bg-black/40 pl-10 pr-3 text-sm outline-none transition focus:border-emerald-400/50"
-                />
+                <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, description, or document type" className="h-11 w-full border border-white/10 bg-black/40 pl-10 pr-3 text-sm outline-none transition focus:border-emerald-400/50" />
               </div>
               <button type="submit" className="h-11 border border-white/10 px-4 text-sm text-slate-200 transition hover:border-emerald-400/40 hover:text-white">Search</button>
               <button type="button" onClick={() => void loadDocuments(query)} className="flex h-11 w-11 items-center justify-center border border-white/10 text-slate-400 transition hover:text-white" aria-label="Refresh documents">
@@ -217,18 +263,10 @@ export default function OperatorDocumentsPage() {
 
           {showUpload && (
             <form onSubmit={uploadDocument} className="grid gap-4 border-b border-emerald-400/15 bg-emerald-400/[0.035] p-5 md:grid-cols-2">
-              <label className="text-sm text-slate-300">Title
-                <input name="title" required className="mt-2 h-11 w-full border border-white/10 bg-black/40 px-3 outline-none focus:border-emerald-400/50" />
-              </label>
-              <label className="text-sm text-slate-300">Document type
-                <input name="documentType" required placeholder="Agreement, filing, statement..." className="mt-2 h-11 w-full border border-white/10 bg-black/40 px-3 outline-none focus:border-emerald-400/50" />
-              </label>
-              <label className="text-sm text-slate-300 md:col-span-2">Description
-                <textarea name="description" rows={3} className="mt-2 w-full border border-white/10 bg-black/40 px-3 py-2 outline-none focus:border-emerald-400/50" />
-              </label>
-              <label className="text-sm text-slate-300 md:col-span-2">File
-                <input name="file" type="file" required className="mt-2 block w-full border border-dashed border-white/15 bg-black/30 p-4 text-sm file:mr-4 file:border-0 file:bg-emerald-400 file:px-4 file:py-2 file:font-semibold file:text-black" />
-              </label>
+              <label className="text-sm text-slate-300">Title<input name="title" required className="mt-2 h-11 w-full border border-white/10 bg-black/40 px-3 outline-none focus:border-emerald-400/50" /></label>
+              <label className="text-sm text-slate-300">Document type<input name="documentType" required placeholder="Agreement, filing, statement..." className="mt-2 h-11 w-full border border-white/10 bg-black/40 px-3 outline-none focus:border-emerald-400/50" /></label>
+              <label className="text-sm text-slate-300 md:col-span-2">Description<textarea name="description" rows={3} className="mt-2 w-full border border-white/10 bg-black/40 px-3 py-2 outline-none focus:border-emerald-400/50" /></label>
+              <label className="text-sm text-slate-300 md:col-span-2">File<input name="file" type="file" required className="mt-2 block w-full border border-dashed border-white/15 bg-black/30 p-4 text-sm file:mr-4 file:border-0 file:bg-emerald-400 file:px-4 file:py-2 file:font-semibold file:text-black" /></label>
               <div className="md:col-span-2 flex justify-end">
                 <button disabled={uploading} className="inline-flex h-11 items-center gap-2 bg-emerald-400 px-5 text-sm font-semibold text-black disabled:opacity-60">
                   {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
@@ -238,23 +276,13 @@ export default function OperatorDocumentsPage() {
             </form>
           )}
 
-          {(notice || error) && (
-            <div className={`border-b p-4 text-sm ${error ? "border-red-400/20 bg-red-400/5 text-red-200" : "border-emerald-400/20 bg-emerald-400/5 text-emerald-200"}`}>
-              {error || notice}
-            </div>
-          )}
+          {(notice || error) && <div className={`border-b p-4 text-sm ${error ? "border-red-400/20 bg-red-400/5 text-red-200" : "border-emerald-400/20 bg-emerald-400/5 text-emerald-200"}`}>{error || notice}</div>}
 
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[980px] text-left text-sm">
+            <table className="w-full min-w-[1060px] text-left text-sm">
               <thead className="border-b border-white/10 bg-black/30 text-xs uppercase tracking-wider text-slate-500">
                 <tr>
-                  <th className="px-5 py-4">Document</th>
-                  <th className="px-5 py-4">Type</th>
-                  <th className="px-5 py-4">Version</th>
-                  <th className="px-5 py-4">Size</th>
-                  <th className="px-5 py-4">Integrity</th>
-                  <th className="px-5 py-4">Updated</th>
-                  <th className="px-5 py-4 text-right">Actions</th>
+                  <th className="px-5 py-4">Document</th><th className="px-5 py-4">Type</th><th className="px-5 py-4">Version</th><th className="px-5 py-4">Size</th><th className="px-5 py-4">Integrity</th><th className="px-5 py-4">Updated</th><th className="px-5 py-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/10">
@@ -264,36 +292,18 @@ export default function OperatorDocumentsPage() {
                   <tr><td colSpan={7} className="px-5 py-16 text-center text-slate-500">No documents found.</td></tr>
                 ) : documents.map((document) => (
                   <tr key={document.document_id} className="transition hover:bg-white/[0.025]">
-                    <td className="px-5 py-4">
-                      <div className="flex items-start gap-3">
-                        <FileText className="mt-0.5 h-5 w-5 shrink-0 text-emerald-300" />
-                        <div>
-                          <p className="font-medium text-white">{document.title}</p>
-                          <p className="mt-1 max-w-md truncate text-xs text-slate-500">{document.original_filename || document.description || document.document_id}</p>
-                        </div>
-                      </div>
-                    </td>
+                    <td className="px-5 py-4"><div className="flex items-start gap-3"><FileText className="mt-0.5 h-5 w-5 shrink-0 text-emerald-300" /><div><p className="font-medium text-white">{document.title}</p><p className="mt-1 max-w-md truncate text-xs text-slate-500">{document.original_filename || document.description || document.document_id}</p></div></div></td>
                     <td className="px-5 py-4 text-slate-300">{document.document_type}</td>
                     <td className="px-5 py-4"><span className="border border-white/10 bg-white/[0.04] px-2 py-1 text-xs">v{document.current_version}</span></td>
                     <td className="px-5 py-4 text-slate-400">{formatBytes(document.byte_length)}</td>
-                    <td className="px-5 py-4">
-                      {document.frozen ? (
-                        <span className="inline-flex items-center gap-1.5 text-xs text-emerald-300"><Lock className="h-3.5 w-3.5" />Frozen</span>
-                      ) : (
-                        <span className="text-xs text-amber-300">Mutable</span>
-                      )}
-                    </td>
+                    <td className="px-5 py-4">{document.frozen ? <span className="inline-flex items-center gap-1.5 text-xs text-emerald-300"><Lock className="h-3.5 w-3.5" />Frozen</span> : <span className="text-xs text-amber-300">Mutable</span>}</td>
                     <td className="px-5 py-4 text-slate-400">{formatDate(document.updated_at)}</td>
-                    <td className="px-5 py-4">
-                      <div className="flex justify-end gap-2">
-                        <a href={`/api/operator/documents/${document.document_id}?disposition=inline`} target="_blank" rel="noreferrer" className="flex h-9 w-9 items-center justify-center border border-white/10 text-slate-400 transition hover:border-emerald-400/40 hover:text-white" aria-label={`Preview ${document.title}`}><Eye className="h-4 w-4" /></a>
-                        <a href={`/api/operator/documents/${document.document_id}`} className="flex h-9 w-9 items-center justify-center border border-white/10 text-slate-400 transition hover:border-emerald-400/40 hover:text-white" aria-label={`Download ${document.title}`}><Download className="h-4 w-4" /></a>
-                        <button disabled={Boolean(document.frozen) || freezingId === document.document_id} onClick={() => void freezeVersion(document)} className="inline-flex h-9 items-center gap-2 border border-white/10 px-3 text-xs text-slate-300 transition hover:border-emerald-400/40 hover:text-white disabled:cursor-not-allowed disabled:opacity-40">
-                          {freezingId === document.document_id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />}
-                          {document.frozen ? "Frozen" : "Freeze"}
-                        </button>
-                      </div>
-                    </td>
+                    <td className="px-5 py-4"><div className="flex justify-end gap-2">
+                      <button onClick={() => void openHistory(document)} className="flex h-9 w-9 items-center justify-center border border-white/10 text-slate-400 transition hover:border-emerald-400/40 hover:text-white" aria-label={`History for ${document.title}`}><History className="h-4 w-4" /></button>
+                      <a href={`/api/operator/documents/${document.document_id}?disposition=inline`} target="_blank" rel="noreferrer" className="flex h-9 w-9 items-center justify-center border border-white/10 text-slate-400 transition hover:border-emerald-400/40 hover:text-white" aria-label={`Preview ${document.title}`}><Eye className="h-4 w-4" /></a>
+                      <a href={`/api/operator/documents/${document.document_id}`} className="flex h-9 w-9 items-center justify-center border border-white/10 text-slate-400 transition hover:border-emerald-400/40 hover:text-white" aria-label={`Download ${document.title}`}><Download className="h-4 w-4" /></a>
+                      <button disabled={Boolean(document.frozen) || freezingId === document.document_id} onClick={() => void freezeVersion(document)} className="inline-flex h-9 items-center gap-2 border border-white/10 px-3 text-xs text-slate-300 transition hover:border-emerald-400/40 hover:text-white disabled:cursor-not-allowed disabled:opacity-40">{freezingId === document.document_id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Lock className="h-3.5 w-3.5" />}{document.frozen ? "Frozen" : "Freeze"}</button>
+                    </div></td>
                   </tr>
                 ))}
               </tbody>
@@ -301,6 +311,29 @@ export default function OperatorDocumentsPage() {
           </div>
         </section>
       </div>
+
+      {historyDocument && (
+        <div className="fixed inset-0 z-50 flex justify-end bg-black/75 backdrop-blur-sm">
+          <aside className="h-full w-full max-w-xl overflow-y-auto border-l border-emerald-400/20 bg-[#050908] shadow-2xl">
+            <div className="sticky top-0 z-10 flex items-start justify-between border-b border-white/10 bg-[#050908]/95 p-5 backdrop-blur">
+              <div><p className="text-xs uppercase tracking-[0.24em] text-emerald-300">Document history</p><h2 className="mt-2 text-xl font-semibold text-white">{historyDocument.title}</h2><p className="mt-1 text-sm text-slate-500">Current version {historyDocument.current_version}</p></div>
+              <button onClick={() => setHistoryDocument(null)} className="flex h-10 w-10 items-center justify-center border border-white/10 text-slate-400 hover:text-white" aria-label="Close history"><X className="h-4 w-4" /></button>
+            </div>
+            <div className="p-5">
+              {historyLoading ? <div className="py-20 text-center text-slate-400"><Loader2 className="mx-auto mb-3 h-6 w-6 animate-spin text-emerald-300" />Loading event history</div> : events.length === 0 ? <div className="py-20 text-center text-slate-500">No events recorded.</div> : (
+                <div className="space-y-3">
+                  {events.map((event) => (
+                    <div key={event.event_id} className="border border-white/10 bg-white/[0.025] p-4">
+                      <div className="flex items-start justify-between gap-4"><div><p className="font-medium text-white">{eventLabel(event.event_type)}</p><p className="mt-1 text-xs text-slate-500">{formatDate(event.occurred_at)}</p></div>{event.version_number ? <span className="border border-emerald-400/20 bg-emerald-400/5 px-2 py-1 text-xs text-emerald-300">v{event.version_number}</span> : null}</div>
+                      <div className="mt-4 grid gap-2 text-xs text-slate-400"><p><span className="text-slate-600">Actor:</span> {event.actor_user_id}</p>{event.original_filename ? <p><span className="text-slate-600">File:</span> {event.original_filename}</p> : null}{event.checksum_sha256 ? <p className="break-all"><span className="text-slate-600">Checksum:</span> {event.checksum_sha256}</p> : null}{event.metadata?.checksumVerified === true ? <p className="text-emerald-300">Checksum verified before access</p> : null}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
     </main>
   );
 }
