@@ -6,27 +6,53 @@ import {
   Activity,
   BriefcaseBusiness,
   Building2,
-  CircleDollarSign,
   FileText,
   Headphones,
   Home,
   LogOut,
-  RotateCcw,
   UserRound,
   UsersRound,
 } from "lucide-react";
 
+type WorkerProfile = {
+  career_profile_id: string;
+  email: string;
+  full_name: string;
+  career_stage: string;
+  current_role: string;
+  location: string;
+};
+
+type WorkerMetrics = {
+  total_applications: string;
+  active_applications: string;
+};
+
+type WorkerTimelineEvent = {
+  timeline_event_id: string;
+  title: string;
+  body: string | null;
+  created_at: string;
+};
+
 type SupportCase = {
-  id: string;
+  support_case_id: string;
   subject: string;
   detail: string;
-  status: "Open";
-  createdAt: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type WorkerWorkspaceResponse = {
+  profile: WorkerProfile | null;
+  metrics: WorkerMetrics | null;
+  timeline: WorkerTimelineEvent[];
+  supportCases: SupportCase[];
 };
 
 const workerNav = [
   { label: "Home", href: "#worker-home", icon: Home },
-  { label: "Pay", href: "#worker-pay", icon: CircleDollarSign },
   { label: "Activity", href: "#worker-activity", icon: Activity },
   { label: "Documents", href: "#worker-documents", icon: FileText },
   { label: "Support", href: "#worker-support", icon: Headphones },
@@ -66,7 +92,7 @@ function Shell({
             <span className="hidden text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300 sm:block">{label}</span>
             {nav}
             <Link href="/" className="inline-flex h-10 items-center gap-2 border border-white/10 px-3 text-sm text-slate-300 hover:border-emerald-300/50 hover:text-white">
-              <LogOut className="h-4 w-4" /> Exit demo
+              <LogOut className="h-4 w-4" /> Exit
             </Link>
           </div>
         </div>
@@ -86,55 +112,77 @@ function Card({ title, children, id }: { title: string; children: React.ReactNod
 }
 
 export function WorkerWorkspacePage() {
-  const [cases, setCases] = useState<SupportCase[]>([]);
-  const [subject, setSubject] = useState("Payroll correction question");
+  const [email, setEmail] = useState("");
+  const [workspace, setWorkspace] = useState<WorkerWorkspaceResponse | null>(null);
+  const [subject, setSubject] = useState("");
   const [detail, setDetail] = useState("");
-  const [saved, setSaved] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    const stored = window.sessionStorage.getItem("sain-worker-support-cases");
-    if (!stored) return;
-    try { setCases(JSON.parse(stored) as SupportCase[]); } catch { window.sessionStorage.removeItem("sain-worker-support-cases"); }
+    const savedEmail = window.localStorage.getItem("sain-career-email") || "";
+    setEmail(savedEmail);
   }, []);
 
-  useEffect(() => {
-    if (cases.length === 0) {
-      window.sessionStorage.removeItem("sain-worker-support-cases");
+  async function loadWorkspace(candidateEmail: string) {
+    const normalized = candidateEmail.trim().toLowerCase();
+    if (!normalized) {
+      setWorkspace(null);
       return;
     }
-    window.sessionStorage.setItem("sain-worker-support-cases", JSON.stringify(cases));
-  }, [cases]);
 
-  const activity = useMemo(
-    () => [
-      ...cases.map((item) => `Support case ${item.id} opened: ${item.subject}`),
-      "Expected paycheck refreshed to $2,840.00",
-      "Employment standing confirmed as active",
-      "Payroll correction window opened",
-    ],
-    [cases],
-  );
-
-  function submitCase(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setCases((current) => {
-      const next: SupportCase = {
-        id: `SC-${String(current.length + 1).padStart(3, "0")}`,
-        subject,
-        detail: detail || "Worker requested review of a paycheck-related issue.",
-        status: "Open",
-        createdAt: new Date().toLocaleString(),
-      };
-      return [next, ...current];
-    });
-    setDetail("");
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 1800);
+    setLoading(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/platform/worker?email=${encodeURIComponent(normalized)}`);
+      const body = (await response.json()) as WorkerWorkspaceResponse & { error?: string };
+      if (!response.ok) throw new Error(body.error || "WORKER_WORKSPACE_UNAVAILABLE");
+      setWorkspace(body);
+      window.localStorage.setItem("sain-career-email", normalized);
+    } catch (requestError) {
+      setWorkspace(null);
+      setError(requestError instanceof Error ? requestError.message : "WORKER_WORKSPACE_UNAVAILABLE");
+    } finally {
+      setLoading(false);
+    }
   }
 
-  function resetDemo() {
-    setCases([]);
-    window.sessionStorage.removeItem("sain-worker-support-cases");
+  useEffect(() => {
+    if (email) void loadWorkspace(email);
+  }, [email]);
+
+  const openCases = useMemo(
+    () => workspace?.supportCases.filter((item) => !["RESOLVED", "CLOSED"].includes(item.status)) ?? [],
+    [workspace],
+  );
+
+  async function submitCase(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!workspace?.profile) return;
+
+    setSubmitting(true);
+    setError("");
+    try {
+      const response = await fetch("/api/platform/worker", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          email: workspace.profile.email,
+          subject,
+          detail,
+        }),
+      });
+      const body = (await response.json()) as { supportCase?: SupportCase; error?: string };
+      if (!response.ok || !body.supportCase) throw new Error(body.error || "WORKER_SUPPORT_CASE_FAILED");
+      setWorkspace((current) => current ? { ...current, supportCases: [body.supportCase as SupportCase, ...current.supportCases] } : current);
+      setSubject("");
+      setDetail("");
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "WORKER_SUPPORT_CASE_FAILED");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -153,21 +201,44 @@ export function WorkerWorkspacePage() {
       <section id="worker-home" className="border-b border-white/10">
         <div className="mx-auto max-w-7xl px-5 py-14 sm:px-8">
           <p className="text-xs font-semibold uppercase tracking-[0.25em] text-emerald-300">Worker dashboard</p>
-          <div className="mt-4 flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-            <div>
-              <h1 className="text-4xl font-semibold sm:text-6xl">Welcome back, Maya.</h1>
-              <p className="mt-4 max-w-2xl text-lg leading-8 text-slate-300">Track your pay, employment activity, documents, and support requests from one worker-owned workspace.</p>
-            </div>
-            <button onClick={resetDemo} className="inline-flex h-11 items-center justify-center gap-2 border border-white/10 px-4 text-sm text-slate-300 hover:border-emerald-300/50 hover:text-white">
-              <RotateCcw className="h-4 w-4" /> Reset demo
-            </button>
+          <div className="mt-4 max-w-3xl">
+            <h1 className="text-4xl font-semibold sm:text-6xl">
+              {workspace?.profile ? `Welcome back, ${workspace.profile.full_name}.` : "Connect your career profile."}
+            </h1>
+            <p className="mt-4 text-lg leading-8 text-slate-300">This workspace now shows persisted career, application, timeline, and support information.</p>
           </div>
+
+          {!workspace?.profile && (
+            <div className="mt-8 max-w-xl border border-white/10 bg-white/[0.025] p-5">
+              <label className="grid gap-2 text-sm text-slate-300">
+                Career profile email
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  className="h-11 border border-white/10 bg-black px-3 text-white"
+                  placeholder="you@example.com"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void loadWorkspace(email)}
+                disabled={loading}
+                className="mt-4 h-11 bg-emerald-400 px-5 font-semibold text-black disabled:opacity-60"
+              >
+                {loading ? "Loading..." : "Load workspace"}
+              </button>
+            </div>
+          )}
+
+          {error && <p className="mt-5 text-sm text-red-300">{error}</p>}
+
           <div className="mt-10 grid gap-4 md:grid-cols-4">
             {[
-              ["Employment", "Active"],
-              ["Expected pay", "$2,840"],
-              ["Next payday", "Friday"],
-              ["Open support cases", String(cases.length)],
+              ["Career stage", workspace?.profile?.career_stage || "No profile"],
+              ["Total applications", workspace?.metrics?.total_applications || "0"],
+              ["Active applications", workspace?.metrics?.active_applications || "0"],
+              ["Open support cases", String(openCases.length)],
             ].map(([label, value]) => (
               <div key={label} className="border border-white/10 bg-white/[0.025] p-5">
                 <p className="text-sm text-slate-400">{label}</p>
@@ -179,61 +250,65 @@ export function WorkerWorkspacePage() {
       </section>
 
       <div className="mx-auto grid max-w-7xl gap-5 px-5 py-10 sm:px-8 lg:grid-cols-2">
-        <Card id="worker-pay" title="Pay">
-          <div className="grid gap-3">
-            {[
-              ["Expected payroll", "$2,840.00", "Projected"],
-              ["Off-cycle event", "$420.00", "Pending review"],
-              ["Correction window", "Open", "Action available"],
-            ].map(([label, value, status]) => (
-              <div key={label} className="flex items-center justify-between border border-white/10 p-4">
-                <div><p className="font-semibold">{label}</p><p className="mt-1 text-xs text-slate-500">{status}</p></div>
-                <p className="font-mono text-emerald-200">{value}</p>
-              </div>
-            ))}
-          </div>
-        </Card>
-
         <Card id="worker-activity" title="Activity">
           <div className="grid gap-3">
-            {activity.map((item) => <div key={item} className="border-l border-emerald-300/40 pl-4 text-sm leading-6 text-slate-300">{item}</div>)}
+            {!workspace?.timeline.length ? (
+              <p className="text-sm text-slate-400">No application activity is available.</p>
+            ) : (
+              workspace.timeline.map((item) => (
+                <div key={item.timeline_event_id} className="border-l border-emerald-300/40 pl-4 text-sm leading-6 text-slate-300">
+                  <p className="font-semibold text-white">{item.title}</p>
+                  {item.body && <p>{item.body}</p>}
+                  <p className="mt-1 text-xs text-slate-500">{new Date(item.created_at).toLocaleString()}</p>
+                </div>
+              ))
+            )}
           </div>
         </Card>
 
         <Card id="worker-documents" title="Documents">
-          <div className="grid gap-3 sm:grid-cols-2">
-            {["Employment agreement", "Pay profile", "Tax forms", "Identity documents"].map((item) => (
-              <button key={item} className="flex items-center gap-3 border border-white/10 p-4 text-left text-sm hover:border-emerald-300/50">
-                <FileText className="h-5 w-5 text-emerald-300" /> {item}
-              </button>
-            ))}
-          </div>
+          <p className="text-sm leading-7 text-slate-300">
+            Resume files are stored with submitted applications. A dedicated worker-document repository is not connected to this workspace yet.
+          </p>
         </Card>
 
         <Card id="worker-profile" title="Profile">
-          <div className="grid gap-3 text-sm text-slate-300">
-            <p><span className="text-slate-500">Worker:</span> Maya Ellis</p>
-            <p><span className="text-slate-500">Role:</span> Operations Lead</p>
-            <p><span className="text-slate-500">Employer:</span> Greenwood Logistics</p>
-            <p><span className="text-slate-500">Workspace:</span> Career OS + Pay</p>
-          </div>
+          {workspace?.profile ? (
+            <div className="grid gap-3 text-sm text-slate-300">
+              <p><span className="text-slate-500">Worker:</span> {workspace.profile.full_name}</p>
+              <p><span className="text-slate-500">Email:</span> {workspace.profile.email}</p>
+              <p><span className="text-slate-500">Current role:</span> {workspace.profile.current_role}</p>
+              <p><span className="text-slate-500">Career stage:</span> {workspace.profile.career_stage}</p>
+              <p><span className="text-slate-500">Location:</span> {workspace.profile.location}</p>
+            </div>
+          ) : (
+            <p className="text-sm text-slate-400">No career profile is loaded.</p>
+          )}
         </Card>
 
         <Card id="worker-support" title="Support and disputes">
           <form onSubmit={submitCase} className="grid gap-4">
-            <label className="grid gap-2 text-sm text-slate-300">Subject<input value={subject} onChange={(event) => setSubject(event.target.value)} className="h-11 border border-white/10 bg-black px-3 text-white" /></label>
-            <label className="grid gap-2 text-sm text-slate-300">What happened?<textarea value={detail} onChange={(event) => setDetail(event.target.value)} className="min-h-28 border border-white/10 bg-black p-3 text-white" /></label>
-            <button className="h-11 bg-emerald-400 px-5 font-semibold text-black hover:bg-emerald-300">{saved ? "Case created" : "Open support case"}</button>
+            <label className="grid gap-2 text-sm text-slate-300">
+              Subject
+              <input required value={subject} onChange={(event) => setSubject(event.target.value)} className="h-11 border border-white/10 bg-black px-3 text-white" />
+            </label>
+            <label className="grid gap-2 text-sm text-slate-300">
+              What happened?
+              <textarea required value={detail} onChange={(event) => setDetail(event.target.value)} className="min-h-28 border border-white/10 bg-black p-3 text-white" />
+            </label>
+            <button disabled={!workspace?.profile || submitting} className="h-11 bg-emerald-400 px-5 font-semibold text-black disabled:opacity-60">
+              {submitting ? "Creating case..." : "Open support case"}
+            </button>
           </form>
         </Card>
 
-        <Card title="Open cases">
+        <Card title="Support cases">
           <div className="grid gap-3">
-            {cases.length === 0 ? <p className="text-sm text-slate-400">No support cases are open.</p> : cases.map((item) => (
-              <div key={item.id} className="border border-white/10 p-4">
+            {!workspace?.supportCases.length ? <p className="text-sm text-slate-400">No support cases are recorded.</p> : workspace.supportCases.map((item) => (
+              <div key={item.support_case_id} className="border border-white/10 p-4">
                 <div className="flex justify-between gap-4"><p className="font-semibold">{item.subject}</p><span className="text-sm text-emerald-200">{item.status}</span></div>
                 <p className="mt-2 text-sm text-slate-400">{item.detail}</p>
-                <p className="mt-3 text-xs text-slate-600">{item.id} · {item.createdAt}</p>
+                <p className="mt-3 text-xs text-slate-600">{item.support_case_id} · {new Date(item.created_at).toLocaleString()}</p>
               </div>
             ))}
           </div>
