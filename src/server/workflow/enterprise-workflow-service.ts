@@ -241,7 +241,8 @@ export async function updateWorkflowItem(input: {
         [input.operator.institutionKey,input.itemId,status],
       );
       if (!result.rows[0]) throw new Error("WORKFLOW_TASK_NOT_FOUND");
-      await recordEvent(client,input.operator,result.rows[0].workflow_instance_id,"WORKFLOW_TASK",input.itemId,`WORKFLOW_TASK_${status}`,{ note: input.note || null });
+      const workflowInstanceId = result.rows[0].workflow_instance_id as string;
+      await recordEvent(client,input.operator,workflowInstanceId,"WORKFLOW_TASK",input.itemId,`WORKFLOW_TASK_${status}`,{ note: input.note || null });
       return { status };
     }
 
