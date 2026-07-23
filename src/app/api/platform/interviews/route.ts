@@ -209,7 +209,7 @@ export async function PATCH(request: NextRequest) {
       );
       const current = currentResult.rows[0];
       if (!current) throw new Error("INTERVIEW_NOT_FOUND");
-      if (!(await canAccessApplication(client, workspace, identifier, current.application_id))) throw new Error("INTERVIEW_NOT_FOUND");
+      if (!(await canAccessApplication(client, workspace, identifier, current.application_id as string))) throw new Error("INTERVIEW_NOT_FOUND");
 
       const result = await client.query(
         `UPDATE application_interviews
