@@ -32,7 +32,9 @@ export async function GET(request: NextRequest, context: { params: Promise<{ doc
       return result.rows[0] || null;
     });
     if (!document) return NextResponse.json({ error: "WORKER_DOCUMENT_NOT_FOUND" }, { status: 404 });
-    return new NextResponse(document.content, {
+
+    const body = new Uint8Array(document.content);
+    return new NextResponse(body, {
       headers: {
         "content-type": document.media_type,
         "content-disposition": `attachment; filename="${document.filename.replace(/"/g, "")}"`,
