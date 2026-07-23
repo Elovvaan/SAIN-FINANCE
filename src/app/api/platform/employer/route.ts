@@ -77,6 +77,17 @@ type ApplicantRow = {
   applicant_location: string;
 };
 
+type MetricsRow = {
+  total_jobs: string;
+  published_jobs: string;
+  active_applicants: string;
+  hired_workers: string;
+  prepared_payroll: string;
+  open_corrections: string;
+  pending_disbursements: string;
+  verified_funding_sources: string;
+};
+
 function required(value: unknown, code: string) {
   const normalized = String(value ?? "").trim();
   if (!normalized) throw new Error(code);
@@ -113,7 +124,19 @@ export async function GET(request: NextRequest) {
         [businessEmail],
       );
       const employer = employerResult.rows[0];
-      if (!employer) return { employer: null, jobs: [] as JobRow[], applicants: [] as ApplicantRow[], timeline: [] };
+      if (!employer) {
+        return {
+          employer: null,
+          jobs: [] as JobRow[],
+          applicants: [] as ApplicantRow[],
+          timeline: [],
+          payrollRecords: [],
+          fundingSources: [],
+          disbursements: [],
+          corrections: [],
+          metrics: null,
+        };
+      }
 
       const jobsResult = await client.query<JobRow>(
         `SELECT * FROM employer_jobs WHERE employer_id = $1 ORDER BY created_at DESC`,
@@ -145,7 +168,52 @@ export async function GET(request: NextRequest) {
          ORDER BY t.created_at DESC`,
         [employer.employer_id],
       );
-      return { employer, jobs: jobsResult.rows, applicants: applicantsResult.rows, timeline: timelineResult.rows };
+      const payrollResult = await client.query(
+        `SELECT * FROM employer_payroll_records WHERE employer_id = $1 ORDER BY created_at DESC`,
+        [employer.employer_id],
+      );
+      const fundingResult = await client.query(
+        `SELECT * FROM employer_funding_sources WHERE employer_id = $1 ORDER BY created_at DESC`,
+        [employer.employer_id],
+      );
+      const disbursementResult = await client.query(
+        `SELECT * FROM employer_disbursements WHERE employer_id = $1 ORDER BY created_at DESC`,
+        [employer.employer_id],
+      );
+      const correctionsResult = await client.query(
+        `SELECT * FROM employer_payroll_corrections WHERE employer_id = $1 ORDER BY created_at DESC`,
+        [employer.employer_id],
+      );
+      const metricsResult = await client.query<MetricsRow>(
+        `SELECT
+           (SELECT COUNT(*)::text FROM employer_jobs WHERE employer_id = $1) AS total_jobs,
+           (SELECT COUNT(*)::text FROM employer_jobs WHERE employer_id = $1 AND status = 'PUBLISHED') AS published_jobs,
+           (SELECT COUNT(*)::text
+              FROM job_applications a
+              JOIN employer_jobs j ON j.job_id = a.job_id
+             WHERE j.employer_id = $1 AND a.status NOT IN ('REJECTED', 'WITHDRAWN', 'HIRED')) AS active_applicants,
+           (SELECT COUNT(*)::text
+              FROM job_applications a
+              JOIN employer_jobs j ON j.job_id = a.job_id
+             WHERE j.employer_id = $1 AND a.status = 'HIRED') AS hired_workers,
+           (SELECT COUNT(*)::text FROM employer_payroll_records WHERE employer_id = $1 AND status = 'PREPARED') AS prepared_payroll,
+           (SELECT COUNT(*)::text FROM employer_payroll_corrections WHERE employer_id = $1 AND status IN ('OPEN', 'IN_REVIEW')) AS open_corrections,
+           (SELECT COUNT(*)::text FROM employer_disbursements WHERE employer_id = $1 AND status IN ('PENDING', 'PROCESSING')) AS pending_disbursements,
+           (SELECT COUNT(*)::text FROM employer_funding_sources WHERE employer_id = $1 AND status = 'VERIFIED') AS verified_funding_sources`,
+        [employer.employer_id],
+      );
+
+      return {
+        employer,
+        jobs: jobsResult.rows,
+        applicants: applicantsResult.rows,
+        timeline: timelineResult.rows,
+        payrollRecords: payrollResult.rows,
+        fundingSources: fundingResult.rows,
+        disbursements: disbursementResult.rows,
+        corrections: correctionsResult.rows,
+        metrics: metricsResult.rows[0],
+      };
     });
     return NextResponse.json(result);
   } catch (error) {
@@ -317,11 +385,7 @@ export async function PATCH(request: NextRequest) {
            LIMIT 1`,
           [applicationId, businessEmail],
         );
-        const previousStatus = currentResult.rows[0]?.shortlist_status;
-        if (!previousStatus) throw new Error("APPLICATION_NOT_FOUND");
-        if (previousStatus === shortlistStatus) {
-          return (await client.query(`SELECT * FROM job_applications WHERE application_id = $1`, [applicationId])).rows[0];
-        }
+        if (!currentResult.rows[0]) throw new Error("APPLICATION_NOT_FOUND");
         const result = await client.query(
           `UPDATE job_applications a
            SET shortlist_status = $3, updated_at = NOW()
@@ -333,23 +397,7 @@ export async function PATCH(request: NextRequest) {
            RETURNING a.*`,
           [applicationId, businessEmail, shortlistStatus],
         );
-        const updated = result.rows[0];
-        if (!updated) throw new Error("APPLICATION_NOT_FOUND");
-        await client.query(
-          `INSERT INTO application_timeline_events (
-             timeline_event_id, application_id, event_type, actor_workspace, actor_identifier,
-             visibility, title, body, metadata
-           ) VALUES ($1, $2, 'SYSTEM', 'EMPLOYER', $3, 'SHARED', $4, $5, $6::jsonb)`,
-          [
-            randomUUID(),
-            applicationId,
-            businessEmail,
-            "Candidate shortlist updated",
-            `Shortlist moved from ${previousStatus} to ${shortlistStatus}`,
-            JSON.stringify({ previousShortlistStatus: previousStatus, shortlistStatus }),
-          ],
-        );
-        return updated;
+        return result.rows[0];
       });
       return NextResponse.json({ application });
     }
@@ -358,7 +406,7 @@ export async function PATCH(request: NextRequest) {
       const businessEmail = required(body.businessEmail, "BUSINESS_EMAIL_REQUIRED").toLowerCase();
       const applicationId = required(body.applicationId, "APPLICATION_ID_REQUIRED");
       const status = required(body.status, "APPLICATION_STATUS_REQUIRED").toUpperCase();
-      if (!applicationStatuses.has(status) || status === "WITHDRAWN") throw new Error("INVALID_APPLICATION_STATUS");
+      if (!applicationStatuses.has(status)) throw new Error("INVALID_APPLICATION_STATUS");
       const application = await database.transaction(async (client) => {
         const currentResult = await client.query<{ status: string }>(
           `SELECT a.status
@@ -371,49 +419,44 @@ export async function PATCH(request: NextRequest) {
         );
         const previousStatus = currentResult.rows[0]?.status;
         if (!previousStatus) throw new Error("APPLICATION_NOT_FOUND");
-        if (!allowedTransitions[previousStatus]?.has(status)) throw new Error("INVALID_APPLICATION_TRANSITION");
-
-        const result = await client.query<ApplicantRow>(
+        if (previousStatus !== status && !allowedTransitions[previousStatus]?.has(status)) {
+          throw new Error("INVALID_APPLICATION_TRANSITION");
+        }
+        const result = await client.query(
           `UPDATE job_applications a
            SET status = $3, updated_at = NOW()
-           FROM employer_jobs j, employer_profiles e, career_profiles p
+           FROM employer_jobs j, employer_profiles e
            WHERE a.application_id = $1
              AND a.job_id = j.job_id
              AND j.employer_id = e.employer_id
              AND e.business_email = $2
-             AND a.career_profile_id = p.career_profile_id
-           RETURNING a.application_id, a.job_id, j.title AS job_title, a.status,
-                     a.shortlist_status, a.match_score, a.match_summary,
-                     a.cover_note, a.resume_filename, a.resume_media_type,
-                     a.resume_byte_length, a.submitted_at, a.updated_at,
-                     p.career_profile_id, p.email, p.full_name, p.career_stage,
-                     p."current_role" AS current_role, p.location AS applicant_location`,
+           RETURNING a.*`,
           [applicationId, businessEmail, status],
         );
-        const updated = result.rows[0];
-        if (!updated) throw new Error("APPLICATION_NOT_FOUND");
-        const statusEventId = randomUUID();
-        await client.query(
-          `INSERT INTO application_status_events (
-             status_event_id, application_id, previous_status, new_status, actor_workspace, actor_identifier
-           ) VALUES ($1, $2, $3, $4, 'EMPLOYER', $5)`,
-          [statusEventId, applicationId, previousStatus, status, businessEmail],
-        );
-        await client.query(
-          `INSERT INTO application_timeline_events (
-             timeline_event_id, application_id, event_type, actor_workspace, actor_identifier,
-             visibility, title, body, metadata
-           ) VALUES ($1, $2, 'STATUS', 'EMPLOYER', $3, 'SHARED', $4, $5, $6::jsonb)`,
-          [
-            randomUUID(),
-            applicationId,
-            businessEmail,
-            "Application status changed",
-            `Application moved from ${previousStatus} to ${status}`,
-            JSON.stringify({ previousStatus, newStatus: status, sourceEventId: statusEventId }),
-          ],
-        );
-        return updated;
+        if (previousStatus !== status) {
+          const statusEventId = randomUUID();
+          await client.query(
+            `INSERT INTO application_status_events (
+               status_event_id, application_id, previous_status, new_status, actor_workspace, actor_identifier
+             ) VALUES ($1, $2, $3, $4, 'EMPLOYER', $5)`,
+            [statusEventId, applicationId, previousStatus, status, businessEmail],
+          );
+          await client.query(
+            `INSERT INTO application_timeline_events (
+               timeline_event_id, application_id, event_type, actor_workspace, actor_identifier,
+               visibility, title, body, metadata
+             ) VALUES ($1, $2, 'STATUS', 'EMPLOYER', $3, 'SHARED', $4, $5, $6::jsonb)`,
+            [
+              randomUUID(),
+              applicationId,
+              businessEmail,
+              `Application moved to ${status}`,
+              `Application moved from ${previousStatus} to ${status}`,
+              JSON.stringify({ previousStatus, newStatus: status, sourceEventId: statusEventId }),
+            ],
+          );
+        }
+        return result.rows[0];
       });
       return NextResponse.json({ application });
     }
