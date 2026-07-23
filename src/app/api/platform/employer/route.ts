@@ -78,7 +78,8 @@ function jsonError(error: unknown) {
     code.endsWith("_REQUIRED") ||
     code === "INVALID_JOB_STATUS" ||
     code === "INVALID_APPLICATION_STATUS" ||
-    code === "INVALID_APPLICATION_TRANSITION"
+    code === "INVALID_APPLICATION_TRANSITION" ||
+    code === "INVALID_TIMELINE_VISIBILITY"
   ) {
     return NextResponse.json({ error: code }, { status: 400 });
   }
@@ -99,7 +100,7 @@ export async function GET(request: NextRequest) {
         [businessEmail],
       );
       const employer = employerResult.rows[0];
-      if (!employer) return { employer: null, jobs: [] as JobRow[], applicants: [] as ApplicantRow[] };
+      if (!employer) return { employer: null, jobs: [] as JobRow[], applicants: [] as ApplicantRow[], timeline: [] };
 
       const jobsResult = await client.query<JobRow>(
         `SELECT * FROM employer_jobs WHERE employer_id = $1 ORDER BY created_at DESC`,
@@ -118,7 +119,16 @@ export async function GET(request: NextRequest) {
          ORDER BY a.submitted_at DESC`,
         [employer.employer_id],
       );
-      return { employer, jobs: jobsResult.rows, applicants: applicantsResult.rows };
+      const timelineResult = await client.query(
+        `SELECT t.*
+         FROM application_timeline_events t
+         JOIN job_applications a ON a.application_id = t.application_id
+         JOIN employer_jobs j ON j.job_id = a.job_id
+         WHERE j.employer_id = $1
+         ORDER BY t.created_at DESC`,
+        [employer.employer_id],
+      );
+      return { employer, jobs: jobsResult.rows, applicants: applicantsResult.rows, timeline: timelineResult.rows };
     });
     return NextResponse.json(result);
   } catch (error) {
@@ -181,6 +191,39 @@ export async function POST(request: NextRequest) {
         return result.rows[0];
       });
       return NextResponse.json({ job }, { status: 201 });
+    }
+
+    if (action === "addTimelineEvent") {
+      const businessEmail = required(body.businessEmail, "BUSINESS_EMAIL_REQUIRED").toLowerCase();
+      const applicationId = required(body.applicationId, "APPLICATION_ID_REQUIRED");
+      const title = required(body.title, "TIMELINE_TITLE_REQUIRED");
+      const timelineBody = String(body.body ?? "").trim() || null;
+      const eventType = String(body.eventType ?? "NOTE").toUpperCase();
+      const visibility = String(body.visibility ?? "INTERNAL").toUpperCase();
+      if (!["NOTE", "INTERVIEW", "PLACEMENT", "SYSTEM"].includes(eventType)) throw new Error("INVALID_APPLICATION_STATUS");
+      if (!["INTERNAL", "SHARED", "APPLICANT"].includes(visibility)) throw new Error("INVALID_TIMELINE_VISIBILITY");
+      const event = await database.transaction(async (client) => {
+        const accessResult = await client.query(
+          `SELECT a.application_id
+           FROM job_applications a
+           JOIN employer_jobs j ON j.job_id = a.job_id
+           JOIN employer_profiles e ON e.employer_id = j.employer_id
+           WHERE a.application_id = $1 AND e.business_email = $2
+           LIMIT 1`,
+          [applicationId, businessEmail],
+        );
+        if (!accessResult.rows[0]) throw new Error("APPLICATION_NOT_FOUND");
+        const result = await client.query(
+          `INSERT INTO application_timeline_events (
+             timeline_event_id, application_id, event_type, actor_workspace, actor_identifier,
+             visibility, title, body, metadata
+           ) VALUES ($1, $2, $3, 'EMPLOYER', $4, $5, $6, $7, '{}'::jsonb)
+           RETURNING *`,
+          [randomUUID(), applicationId, eventType, businessEmail, visibility, title, timelineBody],
+        );
+        return result.rows[0];
+      });
+      return NextResponse.json({ event }, { status: 201 });
     }
 
     throw new Error("ACTION_REQUIRED");
@@ -247,11 +290,26 @@ export async function PATCH(request: NextRequest) {
         );
         const updated = result.rows[0];
         if (!updated) throw new Error("APPLICATION_NOT_FOUND");
+        const statusEventId = randomUUID();
         await client.query(
           `INSERT INTO application_status_events (
              status_event_id, application_id, previous_status, new_status, actor_workspace, actor_identifier
            ) VALUES ($1, $2, $3, $4, 'EMPLOYER', $5)`,
-          [randomUUID(), applicationId, previousStatus, status, businessEmail],
+          [statusEventId, applicationId, previousStatus, status, businessEmail],
+        );
+        await client.query(
+          `INSERT INTO application_timeline_events (
+             timeline_event_id, application_id, event_type, actor_workspace, actor_identifier,
+             visibility, title, body, metadata
+           ) VALUES ($1, $2, 'STATUS', 'EMPLOYER', $3, 'SHARED', $4, $5, $6::jsonb)`,
+          [
+            randomUUID(),
+            applicationId,
+            businessEmail,
+            "Application status changed",
+            `Application moved from ${previousStatus} to ${status}`,
+            JSON.stringify({ previousStatus, newStatus: status, sourceEventId: statusEventId }),
+          ],
         );
         return updated;
       });
