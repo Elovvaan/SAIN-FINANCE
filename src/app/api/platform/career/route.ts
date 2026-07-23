@@ -157,12 +157,12 @@ export async function POST(request: NextRequest) {
     const profile = await database.transaction(async (client) => {
       const result = await client.query<CareerProfileRow>(
         `INSERT INTO career_profiles (
-           career_profile_id, email, full_name, career_stage, current_role, location
+           career_profile_id, email, full_name, career_stage, "current_role", location
          ) VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (email) DO UPDATE SET
            full_name = EXCLUDED.full_name,
            career_stage = EXCLUDED.career_stage,
-           current_role = EXCLUDED.current_role,
+           "current_role" = EXCLUDED."current_role",
            location = EXCLUDED.location,
            updated_at = NOW()
          RETURNING *`,
