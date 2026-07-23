@@ -161,7 +161,14 @@ export async function POST(request: NextRequest) {
                      ''::text AS title, ''::text AS company_name`,
           [randomUUID(), jobId, careerProfileId, coverNote || null, resume.name, resume.type, content, resume.size],
         );
-        return result.rows[0];
+        const created = result.rows[0];
+        await client.query(
+          `INSERT INTO application_status_events (
+             status_event_id, application_id, previous_status, new_status, actor_workspace, actor_identifier
+           ) VALUES ($1, $2, NULL, 'SUBMITTED', 'CAREER', $3)`,
+          [randomUUID(), created.application_id, email],
+        );
+        return created;
       });
       return NextResponse.json({ application }, { status: 201 });
     }
@@ -205,6 +212,16 @@ export async function PATCH(request: NextRequest) {
     if (!applicationStatuses.has(status) || status !== "WITHDRAWN") throw new Error("INVALID_APPLICATION_STATUS");
     const database = new PostgresDatabase();
     const application = await database.transaction(async (client) => {
+      const currentResult = await client.query<{ status: string }>(
+        `SELECT a.status
+         FROM job_applications a
+         JOIN career_profiles p ON p.career_profile_id = a.career_profile_id
+         WHERE a.application_id = $1 AND p.email = $2
+         LIMIT 1`,
+        [applicationId, email],
+      );
+      const previousStatus = currentResult.rows[0]?.status;
+      if (!previousStatus || ["WITHDRAWN", "HIRED"].includes(previousStatus)) throw new Error("APPLICATION_NOT_FOUND");
       const result = await client.query<ApplicationRow>(
         `UPDATE job_applications a
          SET status = 'WITHDRAWN', updated_at = NOW()
@@ -212,14 +229,20 @@ export async function PATCH(request: NextRequest) {
          WHERE a.application_id = $1
            AND a.career_profile_id = p.career_profile_id
            AND p.email = $2
-           AND a.status NOT IN ('WITHDRAWN', 'HIRED')
          RETURNING a.application_id, a.job_id, a.status, a.cover_note, a.resume_filename,
                    a.resume_media_type, a.resume_byte_length, a.submitted_at, a.updated_at,
                    ''::text AS title, ''::text AS company_name`,
         [applicationId, email],
       );
-      if (!result.rows[0]) throw new Error("APPLICATION_NOT_FOUND");
-      return result.rows[0];
+      const updated = result.rows[0];
+      if (!updated) throw new Error("APPLICATION_NOT_FOUND");
+      await client.query(
+        `INSERT INTO application_status_events (
+           status_event_id, application_id, previous_status, new_status, actor_workspace, actor_identifier
+         ) VALUES ($1, $2, $3, 'WITHDRAWN', 'CAREER', $4)`,
+        [randomUUID(), applicationId, previousStatus, email],
+      );
+      return updated;
     });
     return NextResponse.json({ application });
   } catch (error) {
