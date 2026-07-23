@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { BadgeDollarSign, BriefcaseBusiness, Loader2, Plus, RefreshCw, Search } from "lucide-react";
+import { BadgeDollarSign, BriefcaseBusiness, Loader2, Plus, RefreshCw, Search, type LucideIcon } from "lucide-react";
 
 type Loan = {
   loan_package_id: string;
@@ -138,11 +138,13 @@ export default function OperatorLoansPage() {
 
       <div className="mx-auto max-w-7xl px-5 py-8 sm:px-8">
         <section className="grid gap-4 md:grid-cols-3">
-          {[
-            ["Loan packages", totals.all, BriefcaseBusiness],
-            ["Total requested", money(totals.requested), BadgeDollarSign],
-            ["In review", totals.review, RefreshCw],
-          ].map(([label, value, Icon]) => (
+          {(
+            [
+              ["Loan packages", totals.all, BriefcaseBusiness],
+              ["Total requested", money(totals.requested), BadgeDollarSign],
+              ["In review", totals.review, RefreshCw],
+            ] as [string, number | string, LucideIcon][]
+          ).map(([label, value, Icon]) => (
             <div key={String(label)} className="border border-white/10 bg-white/[0.03] p-5">
               <div className="flex items-center justify-between"><p className="text-sm text-slate-400">{String(label)}</p><Icon className="h-5 w-5 text-emerald-300" /></div>
               <p className="mt-4 text-3xl font-semibold text-white">{String(value)}</p>
