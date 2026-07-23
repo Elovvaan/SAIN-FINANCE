@@ -6,7 +6,12 @@ export type DocumentRepositoryOperator = {
   userId: string;
 };
 
-export type UploadDocumentInput = {
+export type DocumentRequestMetadata = {
+  sourceIp?: string;
+  userAgent?: string;
+};
+
+export type UploadDocumentInput = DocumentRequestMetadata & {
   operator: DocumentRepositoryOperator;
   documentId?: string;
   title: string;
@@ -16,8 +21,6 @@ export type UploadDocumentInput = {
   mediaType: string;
   content: Buffer;
   metadata?: Record<string, unknown>;
-  sourceIp?: string;
-  userAgent?: string;
 };
 
 function checksum(content: Buffer) {
@@ -169,10 +172,39 @@ export async function listDocuments(operator: DocumentRepositoryOperator, query 
   });
 }
 
+export async function listDocumentEvents(operator: DocumentRepositoryOperator, documentId: string) {
+  const database = new PostgresDatabase();
+  return database.transaction(async (client) => {
+    const document = await client.query(
+      `SELECT document_id FROM repository_documents
+       WHERE institution_key = $1 AND document_id = $2
+       LIMIT 1`,
+      [operator.institutionKey, documentId],
+    );
+    if (!document.rows[0]) throw new Error("DOCUMENT_NOT_FOUND");
+
+    const result = await client.query(
+      `SELECT e.event_id, e.document_version_id, e.event_type, e.actor_user_id,
+              e.occurred_at, e.source_ip, e.user_agent, e.metadata,
+              v.version_number, v.original_filename, v.checksum_sha256
+       FROM repository_document_events e
+       LEFT JOIN repository_document_versions v
+         ON v.institution_key = e.institution_key
+        AND v.document_version_id = e.document_version_id
+       WHERE e.institution_key = $1 AND e.document_id = $2
+       ORDER BY e.occurred_at DESC, e.event_id DESC
+       LIMIT 250`,
+      [operator.institutionKey, documentId],
+    );
+    return result.rows;
+  });
+}
+
 export async function getDocumentVersion(
   operator: DocumentRepositoryOperator,
   documentId: string,
   versionNumber?: number,
+  audit?: DocumentRequestMetadata & { eventType?: "DOCUMENT_PREVIEWED" | "DOCUMENT_DOWNLOADED" },
 ) {
   const database = new PostgresDatabase();
   return database.transaction(async (client) => {
@@ -198,6 +230,28 @@ export async function getDocumentVersion(
     const version = result.rows[0];
     if (!version) throw new Error("DOCUMENT_VERSION_NOT_FOUND");
     if (checksum(version.content) !== version.checksum_sha256) throw new Error("DOCUMENT_INTEGRITY_FAILURE");
+
+    if (audit?.eventType) {
+      await client.query(
+        `INSERT INTO repository_document_events (
+           event_id, institution_key, document_id, document_version_id,
+           event_type, actor_user_id, source_ip, user_agent,
+           metadata
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7::inet, $8, $9::jsonb)`,
+        [
+          randomUUID(),
+          operator.institutionKey,
+          documentId,
+          version.document_version_id,
+          audit.eventType,
+          operator.userId,
+          audit.sourceIp || null,
+          audit.userAgent || null,
+          JSON.stringify({ checksumVerified: true }),
+        ],
+      );
+    }
+
     return version;
   });
 }
