@@ -4,7 +4,8 @@ import { PostgresDatabase } from "@/server/finance/postgres-database";
 
 export const runtime = "nodejs";
 
-const statuses = new Set(["NEW", "MATCHED", "SCREENING", "SUBMITTED", "INTERVIEW", "OFFERED", "PLACED", "CLOSED"]);
+const placementStatuses = new Set(["NEW", "MATCHED", "SCREENING", "SUBMITTED", "INTERVIEW", "OFFERED", "PLACED", "CLOSED"]);
+const applicationStatuses = new Set(["SUBMITTED", "IN_REVIEW", "INTERVIEW", "OFFERED", "HIRED", "REJECTED"]);
 
 function required(value: unknown, code: string) {
   const normalized = String(value ?? "").trim();
@@ -14,8 +15,16 @@ function required(value: unknown, code: string) {
 
 function jsonError(error: unknown) {
   const code = error instanceof Error ? error.message : "STAFFING_OS_UNAVAILABLE";
-  if (code.endsWith("_REQUIRED") || code === "INVALID_PLACEMENT_STATUS") return NextResponse.json({ error: code }, { status: 400 });
-  if (code === "STAFFING_PROFILE_NOT_FOUND" || code === "APPLICATION_NOT_FOUND" || code === "ASSIGNMENT_NOT_FOUND") return NextResponse.json({ error: code }, { status: 404 });
+  if (
+    code.endsWith("_REQUIRED") ||
+    code === "INVALID_PLACEMENT_STATUS" ||
+    code === "INVALID_APPLICATION_STATUS"
+  ) {
+    return NextResponse.json({ error: code }, { status: 400 });
+  }
+  if (code === "STAFFING_PROFILE_NOT_FOUND" || code === "APPLICATION_NOT_FOUND" || code === "ASSIGNMENT_NOT_FOUND") {
+    return NextResponse.json({ error: code }, { status: 404 });
+  }
   console.error("STAFFING_OS_REQUEST_FAILED", error);
   return NextResponse.json({ error: "STAFFING_OS_UNAVAILABLE" }, { status: 503 });
 }
@@ -30,14 +39,13 @@ export async function GET(request: NextRequest) {
       const candidatesResult = await client.query(`
         SELECT a.application_id, a.status AS application_status, a.cover_note, a.resume_filename,
                a.submitted_at, cp.full_name, cp.email, cp."current_role", cp.location,
-               j.job_id, j.title, j.location AS job_location, e.company_name,
+               j.job_id, j.title, j.location AS job_location, j.status AS job_status, e.company_name,
                sa.staffing_assignment_id, sa.recruiter_note, sa.placement_status, sa.updated_at AS assignment_updated_at
         FROM job_applications a
         JOIN career_profiles cp ON cp.career_profile_id = a.career_profile_id
         JOIN employer_jobs j ON j.job_id = a.job_id
         JOIN employer_profiles e ON e.employer_id = j.employer_id
         LEFT JOIN staffing_assignments sa ON sa.application_id = a.application_id
-        WHERE a.status <> 'WITHDRAWN'
         ORDER BY a.submitted_at DESC
       `);
       return { profile, candidates: candidatesResult.rows };
@@ -80,13 +88,14 @@ export async function POST(request: NextRequest) {
       const applicationId = required(body.applicationId, "APPLICATION_ID_REQUIRED");
       const recruiterNote = String(body.recruiterNote ?? "").trim() || null;
       const placementStatus = String(body.placementStatus ?? "NEW").toUpperCase();
-      if (!statuses.has(placementStatus)) throw new Error("INVALID_PLACEMENT_STATUS");
+      if (!placementStatuses.has(placementStatus)) throw new Error("INVALID_PLACEMENT_STATUS");
       const assignment = await database.transaction(async (client) => {
         const profileResult = await client.query<{ staffing_profile_id: string }>(`SELECT staffing_profile_id FROM staffing_profiles WHERE business_email = $1 LIMIT 1`, [businessEmail]);
         const staffingProfileId = profileResult.rows[0]?.staffing_profile_id;
         if (!staffingProfileId) throw new Error("STAFFING_PROFILE_NOT_FOUND");
-        const appResult = await client.query(`SELECT application_id FROM job_applications WHERE application_id = $1 LIMIT 1`, [applicationId]);
-        if (!appResult.rows[0]) throw new Error("APPLICATION_NOT_FOUND");
+        const appResult = await client.query(`SELECT application_id, status FROM job_applications WHERE application_id = $1 LIMIT 1`, [applicationId]);
+        const application = appResult.rows[0];
+        if (!application || application.status === "WITHDRAWN") throw new Error("APPLICATION_NOT_FOUND");
         const result = await client.query(`
           INSERT INTO staffing_assignments (staffing_assignment_id, staffing_profile_id, application_id, recruiter_note, placement_status)
           VALUES ($1, $2, $3, $4, $5)
@@ -111,11 +120,31 @@ export async function POST(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const body = (await request.json()) as Record<string, unknown>;
+    const action = String(body.action ?? "updateAssignment");
+    const database = new PostgresDatabase();
+
+    if (action === "updateApplicationStatus") {
+      const applicationId = required(body.applicationId, "APPLICATION_ID_REQUIRED");
+      const status = required(body.status, "APPLICATION_STATUS_REQUIRED").toUpperCase();
+      if (!applicationStatuses.has(status)) throw new Error("INVALID_APPLICATION_STATUS");
+      const application = await database.transaction(async (client) => {
+        const result = await client.query(`
+          UPDATE job_applications
+          SET status = $2, updated_at = NOW()
+          WHERE application_id = $1
+            AND status NOT IN ('WITHDRAWN', 'HIRED')
+          RETURNING *
+        `, [applicationId, status]);
+        if (!result.rows[0]) throw new Error("APPLICATION_NOT_FOUND");
+        return result.rows[0];
+      });
+      return NextResponse.json({ application });
+    }
+
     const assignmentId = required(body.assignmentId, "ASSIGNMENT_ID_REQUIRED");
     const recruiterNote = String(body.recruiterNote ?? "").trim() || null;
     const placementStatus = required(body.placementStatus, "PLACEMENT_STATUS_REQUIRED").toUpperCase();
-    if (!statuses.has(placementStatus)) throw new Error("INVALID_PLACEMENT_STATUS");
-    const database = new PostgresDatabase();
+    if (!placementStatuses.has(placementStatus)) throw new Error("INVALID_PLACEMENT_STATUS");
     const assignment = await database.transaction(async (client) => {
       const result = await client.query(`
         UPDATE staffing_assignments
