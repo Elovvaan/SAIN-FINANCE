@@ -14,6 +14,8 @@ const applicationStatuses = new Set([
   "WITHDRAWN",
 ]);
 
+const shortlistStatuses = new Set(["UNREVIEWED", "SHORTLISTED", "PASSED"]);
+
 const allowedTransitions: Record<string, Set<string>> = {
   SUBMITTED: new Set(["IN_REVIEW", "INTERVIEW", "REJECTED"]),
   IN_REVIEW: new Set(["INTERVIEW", "OFFERED", "REJECTED"]),
@@ -58,6 +60,9 @@ type ApplicantRow = {
   job_id: string;
   job_title: string;
   status: string;
+  shortlist_status: string;
+  match_score: number;
+  match_summary: string | null;
   cover_note: string | null;
   resume_filename: string;
   resume_media_type: string;
@@ -86,6 +91,7 @@ function jsonError(error: unknown) {
     code === "INVALID_JOB_TRANSITION" ||
     code === "INVALID_APPLICATION_STATUS" ||
     code === "INVALID_APPLICATION_TRANSITION" ||
+    code === "INVALID_SHORTLIST_STATUS" ||
     code === "INVALID_TIMELINE_VISIBILITY"
   ) {
     return NextResponse.json({ error: code }, { status: 400 });
@@ -115,6 +121,7 @@ export async function GET(request: NextRequest) {
       );
       const applicantsResult = await client.query<ApplicantRow>(
         `SELECT a.application_id, a.job_id, j.title AS job_title, a.status,
+                a.shortlist_status, a.match_score, a.match_summary,
                 a.cover_note, a.resume_filename, a.resume_media_type,
                 a.resume_byte_length, a.submitted_at, a.updated_at,
                 p.career_profile_id, p.email, p.full_name, p.career_stage,
@@ -123,7 +130,10 @@ export async function GET(request: NextRequest) {
          JOIN employer_jobs j ON j.job_id = a.job_id
          JOIN career_profiles p ON p.career_profile_id = a.career_profile_id
          WHERE j.employer_id = $1
-         ORDER BY a.submitted_at DESC`,
+         ORDER BY
+           CASE a.shortlist_status WHEN 'SHORTLISTED' THEN 0 WHEN 'UNREVIEWED' THEN 1 ELSE 2 END,
+           a.match_score DESC,
+           a.submitted_at DESC`,
         [employer.employer_id],
       );
       const timelineResult = await client.query(
@@ -292,6 +302,58 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ job });
     }
 
+    if (action === "updateShortlistStatus") {
+      const businessEmail = required(body.businessEmail, "BUSINESS_EMAIL_REQUIRED").toLowerCase();
+      const applicationId = required(body.applicationId, "APPLICATION_ID_REQUIRED");
+      const shortlistStatus = required(body.shortlistStatus, "SHORTLIST_STATUS_REQUIRED").toUpperCase();
+      if (!shortlistStatuses.has(shortlistStatus)) throw new Error("INVALID_SHORTLIST_STATUS");
+      const application = await database.transaction(async (client) => {
+        const currentResult = await client.query<{ shortlist_status: string }>(
+          `SELECT a.shortlist_status
+           FROM job_applications a
+           JOIN employer_jobs j ON j.job_id = a.job_id
+           JOIN employer_profiles e ON e.employer_id = j.employer_id
+           WHERE a.application_id = $1 AND e.business_email = $2
+           LIMIT 1`,
+          [applicationId, businessEmail],
+        );
+        const previousStatus = currentResult.rows[0]?.shortlist_status;
+        if (!previousStatus) throw new Error("APPLICATION_NOT_FOUND");
+        if (previousStatus === shortlistStatus) {
+          return (await client.query(`SELECT * FROM job_applications WHERE application_id = $1`, [applicationId])).rows[0];
+        }
+        const result = await client.query(
+          `UPDATE job_applications a
+           SET shortlist_status = $3, updated_at = NOW()
+           FROM employer_jobs j, employer_profiles e
+           WHERE a.application_id = $1
+             AND a.job_id = j.job_id
+             AND j.employer_id = e.employer_id
+             AND e.business_email = $2
+           RETURNING a.*`,
+          [applicationId, businessEmail, shortlistStatus],
+        );
+        const updated = result.rows[0];
+        if (!updated) throw new Error("APPLICATION_NOT_FOUND");
+        await client.query(
+          `INSERT INTO application_timeline_events (
+             timeline_event_id, application_id, event_type, actor_workspace, actor_identifier,
+             visibility, title, body, metadata
+           ) VALUES ($1, $2, 'SYSTEM', 'EMPLOYER', $3, 'SHARED', $4, $5, $6::jsonb)`,
+          [
+            randomUUID(),
+            applicationId,
+            businessEmail,
+            "Candidate shortlist updated",
+            `Shortlist moved from ${previousStatus} to ${shortlistStatus}`,
+            JSON.stringify({ previousShortlistStatus: previousStatus, shortlistStatus }),
+          ],
+        );
+        return updated;
+      });
+      return NextResponse.json({ application });
+    }
+
     if (action === "updateApplicationStatus") {
       const businessEmail = required(body.businessEmail, "BUSINESS_EMAIL_REQUIRED").toLowerCase();
       const applicationId = required(body.applicationId, "APPLICATION_ID_REQUIRED");
@@ -321,6 +383,7 @@ export async function PATCH(request: NextRequest) {
              AND e.business_email = $2
              AND a.career_profile_id = p.career_profile_id
            RETURNING a.application_id, a.job_id, j.title AS job_title, a.status,
+                     a.shortlist_status, a.match_score, a.match_summary,
                      a.cover_note, a.resume_filename, a.resume_media_type,
                      a.resume_byte_length, a.submitted_at, a.updated_at,
                      p.career_profile_id, p.email, p.full_name, p.career_stage,
