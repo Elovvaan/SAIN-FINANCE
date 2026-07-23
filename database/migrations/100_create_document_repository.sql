@@ -8,9 +8,9 @@ CREATE TABLE IF NOT EXISTS repository_documents (
   description TEXT,
   status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'ARCHIVED')),
   current_version INTEGER NOT NULL DEFAULT 0 CHECK (current_version >= 0),
-  created_by UUID NOT NULL REFERENCES users(user_id),
+  created_by TEXT NOT NULL REFERENCES users(user_id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_by UUID NOT NULL REFERENCES users(user_id),
+  updated_by TEXT NOT NULL REFERENCES users(user_id),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb
 );
@@ -44,10 +44,10 @@ CREATE TABLE IF NOT EXISTS repository_document_versions (
   byte_length BIGINT NOT NULL CHECK (byte_length >= 0),
   frozen BOOLEAN NOT NULL DEFAULT FALSE,
   frozen_at TIMESTAMPTZ,
-  frozen_by UUID REFERENCES users(user_id),
+  frozen_by TEXT REFERENCES users(user_id),
   signed_at TIMESTAMPTZ,
   signature_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_by UUID NOT NULL REFERENCES users(user_id),
+  created_by TEXT NOT NULL REFERENCES users(user_id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
   UNIQUE (institution_key, document_id, version_number)
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS repository_document_events (
   document_id UUID NOT NULL REFERENCES repository_documents(document_id) ON DELETE RESTRICT,
   document_version_id UUID REFERENCES repository_document_versions(document_version_id) ON DELETE RESTRICT,
   event_type TEXT NOT NULL,
-  actor_user_id UUID NOT NULL REFERENCES users(user_id),
+  actor_user_id TEXT NOT NULL REFERENCES users(user_id),
   occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   source_ip INET,
   user_agent TEXT,
