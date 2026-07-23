@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { ClipboardCheck, FileWarning, Loader2, Plus, RefreshCw, Search, ShieldCheck } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 type CaseRow = {
   underwriting_case_id: string;
@@ -89,6 +90,12 @@ export default function UnderwritingWorkspacePage() {
     exceptions: cases.filter((item) => item.open_conditions > 0 || item.missing_documents > 0).length,
   }), [cases]);
 
+  const statCards: Array<{ label: string; value: number; Icon: LucideIcon }> = [
+    { label: "Cases", value: totals.all, Icon: ClipboardCheck },
+    { label: "Active review", value: totals.active, Icon: ShieldCheck },
+    { label: "Exceptions", value: totals.exceptions, Icon: FileWarning },
+  ];
+
   async function createCase(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true); setError(null); setNotice(null);
@@ -126,8 +133,8 @@ export default function UnderwritingWorkspacePage() {
 
       <div className="mx-auto max-w-7xl px-5 py-8 sm:px-8">
         <section className="grid gap-4 md:grid-cols-3">
-          {[["Cases", totals.all, ClipboardCheck], ["Active review", totals.active, ShieldCheck], ["Exceptions", totals.exceptions, FileWarning]].map(([label, value, Icon]) => (
-            <div key={String(label)} className="border border-white/10 bg-white/[0.03] p-5"><div className="flex items-center justify-between"><p className="text-sm text-slate-400">{String(label)}</p><Icon className="h-5 w-5 text-emerald-300" /></div><p className="mt-4 text-3xl font-semibold">{String(value)}</p></div>
+          {statCards.map(({ label, value, Icon }) => (
+            <div key={label} className="border border-white/10 bg-white/[0.03] p-5"><div className="flex items-center justify-between"><p className="text-sm text-slate-400">{label}</p><Icon className="h-5 w-5 text-emerald-300" /></div><p className="mt-4 text-3xl font-semibold">{value}</p></div>
           ))}
         </section>
 
