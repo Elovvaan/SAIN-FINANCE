@@ -29,7 +29,8 @@ function jsonError(error: unknown) {
     code.endsWith("_REQUIRED") ||
     code === "INVALID_PLACEMENT_STATUS" ||
     code === "INVALID_APPLICATION_STATUS" ||
-    code === "INVALID_APPLICATION_TRANSITION"
+    code === "INVALID_APPLICATION_TRANSITION" ||
+    code === "INVALID_TIMELINE_VISIBILITY"
   ) {
     return NextResponse.json({ error: code }, { status: 400 });
   }
@@ -59,7 +60,12 @@ export async function GET(request: NextRequest) {
         LEFT JOIN staffing_assignments sa ON sa.application_id = a.application_id
         ORDER BY a.submitted_at DESC
       `);
-      return { profile, candidates: candidatesResult.rows };
+      const timelineResult = await client.query(`
+        SELECT *
+        FROM application_timeline_events
+        ORDER BY created_at DESC
+      `);
+      return { profile, candidates: candidatesResult.rows, timeline: timelineResult.rows };
     });
     return NextResponse.json(result);
   } catch (error) {
@@ -117,9 +123,51 @@ export async function POST(request: NextRequest) {
             updated_at = NOW()
           RETURNING *
         `, [randomUUID(), staffingProfileId, applicationId, recruiterNote, placementStatus]);
-        return result.rows[0];
+        const created = result.rows[0];
+        await client.query(
+          `INSERT INTO application_timeline_events (
+             timeline_event_id, application_id, event_type, actor_workspace, actor_identifier,
+             visibility, title, body, metadata
+           ) VALUES ($1, $2, 'PLACEMENT', 'STAFFING', $3, 'INTERNAL', $4, $5, $6::jsonb)`,
+          [
+            randomUUID(),
+            applicationId,
+            businessEmail,
+            "Candidate assigned",
+            recruiterNote,
+            JSON.stringify({ placementStatus, assignmentId: created.staffing_assignment_id }),
+          ],
+        );
+        return created;
       });
       return NextResponse.json({ assignment }, { status: 201 });
+    }
+
+    if (action === "addTimelineEvent") {
+      const businessEmail = required(body.businessEmail, "BUSINESS_EMAIL_REQUIRED").toLowerCase();
+      const applicationId = required(body.applicationId, "APPLICATION_ID_REQUIRED");
+      const title = required(body.title, "TIMELINE_TITLE_REQUIRED");
+      const timelineBody = String(body.body ?? "").trim() || null;
+      const eventType = String(body.eventType ?? "NOTE").toUpperCase();
+      const visibility = String(body.visibility ?? "INTERNAL").toUpperCase();
+      if (!["NOTE", "INTERVIEW", "PLACEMENT", "SYSTEM"].includes(eventType)) throw new Error("INVALID_APPLICATION_STATUS");
+      if (!["INTERNAL", "SHARED", "APPLICANT"].includes(visibility)) throw new Error("INVALID_TIMELINE_VISIBILITY");
+      const event = await database.transaction(async (client) => {
+        const profileResult = await client.query(`SELECT staffing_profile_id FROM staffing_profiles WHERE business_email = $1 LIMIT 1`, [businessEmail]);
+        if (!profileResult.rows[0]) throw new Error("STAFFING_PROFILE_NOT_FOUND");
+        const appResult = await client.query(`SELECT application_id FROM job_applications WHERE application_id = $1 LIMIT 1`, [applicationId]);
+        if (!appResult.rows[0]) throw new Error("APPLICATION_NOT_FOUND");
+        const result = await client.query(
+          `INSERT INTO application_timeline_events (
+             timeline_event_id, application_id, event_type, actor_workspace, actor_identifier,
+             visibility, title, body, metadata
+           ) VALUES ($1, $2, $3, 'STAFFING', $4, $5, $6, $7, '{}'::jsonb)
+           RETURNING *`,
+          [randomUUID(), applicationId, eventType, businessEmail, visibility, title, timelineBody],
+        );
+        return result.rows[0];
+      });
+      return NextResponse.json({ event }, { status: 201 });
     }
 
     throw new Error("ACTION_REQUIRED");
@@ -160,11 +208,26 @@ export async function PATCH(request: NextRequest) {
         `, [applicationId, status]);
         const updated = result.rows[0];
         if (!updated) throw new Error("APPLICATION_NOT_FOUND");
+        const statusEventId = randomUUID();
         await client.query(
           `INSERT INTO application_status_events (
              status_event_id, application_id, previous_status, new_status, actor_workspace, actor_identifier
            ) VALUES ($1, $2, $3, $4, 'STAFFING', $5)`,
-          [randomUUID(), applicationId, previousStatus, status, businessEmail],
+          [statusEventId, applicationId, previousStatus, status, businessEmail],
+        );
+        await client.query(
+          `INSERT INTO application_timeline_events (
+             timeline_event_id, application_id, event_type, actor_workspace, actor_identifier,
+             visibility, title, body, metadata
+           ) VALUES ($1, $2, 'STATUS', 'STAFFING', $3, 'SHARED', $4, $5, $6::jsonb)`,
+          [
+            randomUUID(),
+            applicationId,
+            businessEmail,
+            "Application status changed",
+            `Application moved from ${previousStatus} to ${status}`,
+            JSON.stringify({ previousStatus, newStatus: status, sourceEventId: statusEventId }),
+          ],
         );
         return updated;
       });
@@ -176,14 +239,30 @@ export async function PATCH(request: NextRequest) {
     const placementStatus = required(body.placementStatus, "PLACEMENT_STATUS_REQUIRED").toUpperCase();
     if (!placementStatuses.has(placementStatus)) throw new Error("INVALID_PLACEMENT_STATUS");
     const assignment = await database.transaction(async (client) => {
+      const currentResult = await client.query(`SELECT * FROM staffing_assignments WHERE staffing_assignment_id = $1 LIMIT 1`, [assignmentId]);
+      const current = currentResult.rows[0];
+      if (!current) throw new Error("ASSIGNMENT_NOT_FOUND");
       const result = await client.query(`
         UPDATE staffing_assignments
         SET recruiter_note = $2, placement_status = $3, updated_at = NOW()
         WHERE staffing_assignment_id = $1
         RETURNING *
       `, [assignmentId, recruiterNote, placementStatus]);
-      if (!result.rows[0]) throw new Error("ASSIGNMENT_NOT_FOUND");
-      return result.rows[0];
+      const updated = result.rows[0];
+      await client.query(
+        `INSERT INTO application_timeline_events (
+           timeline_event_id, application_id, event_type, actor_workspace, actor_identifier,
+           visibility, title, body, metadata
+         ) VALUES ($1, $2, 'PLACEMENT', 'STAFFING', NULL, 'INTERNAL', $3, $4, $5::jsonb)`,
+        [
+          randomUUID(),
+          updated.application_id,
+          "Placement updated",
+          recruiterNote,
+          JSON.stringify({ previousPlacementStatus: current.placement_status, placementStatus, assignmentId }),
+        ],
+      );
+      return updated;
     });
     return NextResponse.json({ assignment });
   } catch (error) {
