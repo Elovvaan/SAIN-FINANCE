@@ -1,7 +1,12 @@
-import { randomUUID } from "crypto";
-import { query } from "@/lib/db";
+import { randomUUID } from "node:crypto";
+import { PostgresDatabase } from "../server/finance/postgres-database";
 
 const INSTITUTION_KEY = "SAIN_FINANCE";
+const database = new PostgresDatabase();
+
+async function query<Row = Record<string, unknown>>(text: string, values: readonly unknown[] = []) {
+  return database.transaction((client) => client.query<Row>(text, values));
+}
 
 export async function getPlatformOperationsWorkspace(search = "") {
   const q = `%${search.trim()}%`;
