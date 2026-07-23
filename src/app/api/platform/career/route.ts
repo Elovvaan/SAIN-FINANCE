@@ -4,6 +4,16 @@ import { PostgresDatabase } from "@/server/finance/postgres-database";
 
 export const runtime = "nodejs";
 
+const applicationStatuses = new Set([
+  "SUBMITTED",
+  "IN_REVIEW",
+  "INTERVIEW",
+  "OFFERED",
+  "HIRED",
+  "REJECTED",
+  "WITHDRAWN",
+]);
+
 type CareerProfileRow = {
   career_profile_id: string;
   email: string;
@@ -48,7 +58,13 @@ function required(value: unknown, code: string) {
 
 function jsonError(error: unknown) {
   const code = error instanceof Error ? error.message : "CAREER_WORKSPACE_UNAVAILABLE";
-  if (code.endsWith("_REQUIRED") || code === "INVALID_RESUME_TYPE" || code === "RESUME_TOO_LARGE" || code === "APPLICATION_ALREADY_EXISTS") {
+  if (
+    code.endsWith("_REQUIRED") ||
+    code === "INVALID_RESUME_TYPE" ||
+    code === "RESUME_TOO_LARGE" ||
+    code === "APPLICATION_ALREADY_EXISTS" ||
+    code === "INVALID_APPLICATION_STATUS"
+  ) {
     return NextResponse.json({ error: code }, { status: 400 });
   }
   if (code === "CAREER_PROFILE_NOT_FOUND" || code === "JOB_NOT_FOUND" || code === "APPLICATION_NOT_FOUND") {
@@ -108,7 +124,11 @@ export async function POST(request: NextRequest) {
       const coverNote = String(form.get("coverNote") || "").trim();
       const resume = form.get("resume");
       if (!(resume instanceof File)) throw new Error("RESUME_REQUIRED");
-      const allowed = new Set(["application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"]);
+      const allowed = new Set([
+        "application/pdf",
+        "application/msword",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ]);
       if (!allowed.has(resume.type)) throw new Error("INVALID_RESUME_TYPE");
       const maximumBytes = 10 * 1024 * 1024;
       if (resume.size > maximumBytes) throw new Error("RESUME_TOO_LARGE");
@@ -134,8 +154,8 @@ export async function POST(request: NextRequest) {
         const result = await client.query<ApplicationRow>(
           `INSERT INTO job_applications (
              application_id, job_id, career_profile_id, cover_note,
-             resume_filename, resume_media_type, resume_content, resume_byte_length
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             resume_filename, resume_media_type, resume_content, resume_byte_length, status
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'SUBMITTED')
            RETURNING application_id, job_id, status, cover_note, resume_filename,
                      resume_media_type, resume_byte_length, submitted_at, updated_at,
                      ''::text AS title, ''::text AS company_name`,
@@ -180,16 +200,23 @@ export async function PATCH(request: NextRequest) {
   try {
     const body = (await request.json()) as Record<string, unknown>;
     const applicationId = required(body.applicationId, "APPLICATION_ID_REQUIRED");
+    const email = required(body.email, "EMAIL_REQUIRED").toLowerCase();
+    const status = String(body.status ?? "WITHDRAWN").toUpperCase();
+    if (!applicationStatuses.has(status) || status !== "WITHDRAWN") throw new Error("INVALID_APPLICATION_STATUS");
     const database = new PostgresDatabase();
     const application = await database.transaction(async (client) => {
       const result = await client.query<ApplicationRow>(
-        `UPDATE job_applications
+        `UPDATE job_applications a
          SET status = 'WITHDRAWN', updated_at = NOW()
-         WHERE application_id = $1 AND status <> 'WITHDRAWN'
-         RETURNING application_id, job_id, status, cover_note, resume_filename,
-                   resume_media_type, resume_byte_length, submitted_at, updated_at,
+         FROM career_profiles p
+         WHERE a.application_id = $1
+           AND a.career_profile_id = p.career_profile_id
+           AND p.email = $2
+           AND a.status NOT IN ('WITHDRAWN', 'HIRED')
+         RETURNING a.application_id, a.job_id, a.status, a.cover_note, a.resume_filename,
+                   a.resume_media_type, a.resume_byte_length, a.submitted_at, a.updated_at,
                    ''::text AS title, ''::text AS company_name`,
-        [applicationId],
+        [applicationId, email],
       );
       if (!result.rows[0]) throw new Error("APPLICATION_NOT_FOUND");
       return result.rows[0];
