@@ -30,7 +30,8 @@ function jsonError(error: unknown) {
     code === "INVALID_PLACEMENT_STATUS" ||
     code === "INVALID_APPLICATION_STATUS" ||
     code === "INVALID_APPLICATION_TRANSITION" ||
-    code === "INVALID_TIMELINE_VISIBILITY"
+    code === "INVALID_TIMELINE_VISIBILITY" ||
+    code === "INVALID_MATCH_SCORE"
   ) {
     return NextResponse.json({ error: code }, { status: 400 });
   }
@@ -50,7 +51,8 @@ export async function GET(request: NextRequest) {
       const profile = profileResult.rows[0] || null;
       const candidatesResult = await client.query(`
         SELECT a.application_id, a.status AS application_status, a.cover_note, a.resume_filename,
-               a.submitted_at, cp.full_name, cp.email, cp."current_role", cp.location,
+               a.submitted_at, a.match_score, a.match_summary,
+               cp.full_name, cp.email, cp."current_role", cp.location,
                j.job_id, j.title, j.location AS job_location, j.status AS job_status, e.company_name,
                sa.staffing_assignment_id, sa.recruiter_note, sa.placement_status, sa.updated_at AS assignment_updated_at
         FROM job_applications a
@@ -60,7 +62,7 @@ export async function GET(request: NextRequest) {
         LEFT JOIN staffing_assignments sa ON sa.application_id = a.application_id
         WHERE j.status = 'PUBLISHED'
           AND a.status NOT IN ('WITHDRAWN', 'REJECTED', 'HIRED')
-        ORDER BY a.submitted_at DESC
+        ORDER BY a.match_score DESC, a.submitted_at DESC
       `);
       const timelineResult = await client.query(`
         SELECT *
@@ -189,6 +191,46 @@ export async function PATCH(request: NextRequest) {
     const body = (await request.json()) as Record<string, unknown>;
     const action = String(body.action ?? "updateAssignment");
     const database = new PostgresDatabase();
+
+    if (action === "updateMatchScore") {
+      const businessEmail = required(body.businessEmail, "BUSINESS_EMAIL_REQUIRED").toLowerCase();
+      const applicationId = required(body.applicationId, "APPLICATION_ID_REQUIRED");
+      const matchScore = Number(body.matchScore);
+      const matchSummary = String(body.matchSummary ?? "").trim() || null;
+      if (!Number.isInteger(matchScore) || matchScore < 0 || matchScore > 100) throw new Error("INVALID_MATCH_SCORE");
+      const application = await database.transaction(async (client) => {
+        const profileResult = await client.query(`SELECT staffing_profile_id FROM staffing_profiles WHERE business_email = $1 LIMIT 1`, [businessEmail]);
+        if (!profileResult.rows[0]) throw new Error("STAFFING_PROFILE_NOT_FOUND");
+        const result = await client.query(`
+          UPDATE job_applications a
+          SET match_score = $2, match_summary = $3, updated_at = NOW()
+          FROM employer_jobs j
+          WHERE a.application_id = $1
+            AND a.job_id = j.job_id
+            AND j.status = 'PUBLISHED'
+            AND a.status NOT IN ('WITHDRAWN', 'REJECTED', 'HIRED')
+          RETURNING a.*
+        `, [applicationId, matchScore, matchSummary]);
+        const updated = result.rows[0];
+        if (!updated) throw new Error("APPLICATION_NOT_FOUND");
+        await client.query(
+          `INSERT INTO application_timeline_events (
+             timeline_event_id, application_id, event_type, actor_workspace, actor_identifier,
+             visibility, title, body, metadata
+           ) VALUES ($1, $2, 'SYSTEM', 'STAFFING', $3, 'INTERNAL', $4, $5, $6::jsonb)`,
+          [
+            randomUUID(),
+            applicationId,
+            businessEmail,
+            "Candidate match score updated",
+            matchSummary,
+            JSON.stringify({ matchScore }),
+          ],
+        );
+        return updated;
+      });
+      return NextResponse.json({ application });
+    }
 
     if (action === "updateApplicationStatus") {
       const businessEmail = required(body.businessEmail, "BUSINESS_EMAIL_REQUIRED").toLowerCase();
