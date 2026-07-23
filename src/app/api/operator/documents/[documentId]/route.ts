@@ -10,6 +10,14 @@ function safeFilename(value: string) {
   return value.replace(/[\r\n"\\/]/g, "_");
 }
 
+function requestMetadata(request: NextRequest) {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  return {
+    sourceIp: forwardedFor?.split(",")[0]?.trim() || request.headers.get("x-real-ip") || undefined,
+    userAgent: request.headers.get("user-agent") || undefined,
+  };
+}
+
 function errorResponse(error: unknown) {
   const code = error instanceof Error ? error.message : "DOCUMENT_REPOSITORY_UNAVAILABLE";
   if (code === "AUTHENTICATION_REQUIRED") return NextResponse.json({ error: code }, { status: 401 });
@@ -30,8 +38,11 @@ export async function GET(request: NextRequest, context: RouteContext) {
       return NextResponse.json({ error: "DOCUMENT_VERSION_INVALID" }, { status: 400 });
     }
 
-    const version = await getDocumentVersion(operator, documentId, versionNumber);
     const disposition = request.nextUrl.searchParams.get("disposition") === "inline" ? "inline" : "attachment";
+    const version = await getDocumentVersion(operator, documentId, versionNumber, {
+      eventType: disposition === "inline" ? "DOCUMENT_PREVIEWED" : "DOCUMENT_DOWNLOADED",
+      ...requestMetadata(request),
+    });
     return new NextResponse(new Uint8Array(version.content), {
       headers: {
         "content-type": version.media_type,
