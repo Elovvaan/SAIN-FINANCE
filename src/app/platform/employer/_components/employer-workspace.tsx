@@ -25,6 +25,9 @@ type Applicant = {
   job_id: string;
   job_title: string;
   status: string;
+  shortlist_status: string;
+  match_score: number;
+  match_summary: string | null;
   cover_note: string | null;
   resume_filename: string;
   resume_media_type: string;
@@ -39,6 +42,7 @@ type Applicant = {
 
 const inputClass = "w-full border border-white/10 bg-black/40 px-4 py-3 text-white outline-none focus:border-emerald-300/60";
 const applicationStatuses = ["SUBMITTED", "IN_REVIEW", "INTERVIEW", "OFFERED", "REJECTED"] as const;
+const shortlistStatuses = ["UNREVIEWED", "SHORTLISTED", "PASSED"] as const;
 
 export function EmployerWorkspace() {
   const [businessEmail, setBusinessEmail] = useState("");
@@ -51,6 +55,7 @@ export function EmployerWorkspace() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [applicantFilter, setApplicantFilter] = useState("ALL");
+  const [shortlistFilter, setShortlistFilter] = useState("ALL");
   const [applicantSearch, setApplicantSearch] = useState("");
 
   const [jobTitle, setJobTitle] = useState("");
@@ -62,11 +67,12 @@ export function EmployerWorkspace() {
     const query = applicantSearch.trim().toLowerCase();
     return applicants.filter((applicant) => {
       const statusMatch = applicantFilter === "ALL" || applicant.status === applicantFilter;
-      const searchMatch = !query || [applicant.full_name, applicant.email, applicant.job_title, applicant.current_role, applicant.applicant_location]
+      const shortlistMatch = shortlistFilter === "ALL" || applicant.shortlist_status === shortlistFilter;
+      const searchMatch = !query || [applicant.full_name, applicant.email, applicant.job_title, applicant.current_role, applicant.applicant_location, applicant.match_summary || ""]
         .some((value) => value.toLowerCase().includes(query));
-      return statusMatch && searchMatch;
+      return statusMatch && shortlistMatch && searchMatch;
     });
-  }, [applicants, applicantFilter, applicantSearch]);
+  }, [applicants, applicantFilter, shortlistFilter, applicantSearch]);
 
   async function loadWorkspace(email = businessEmail) {
     if (!email.trim()) return;
@@ -145,7 +151,7 @@ export function EmployerWorkspace() {
       const response = await fetch("/api/platform/employer", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ action: "updateJobStatus", jobId, status }),
+        body: JSON.stringify({ action: "updateJobStatus", businessEmail, jobId, status }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Unable to update job");
@@ -172,6 +178,25 @@ export function EmployerWorkspace() {
       setMessage(`Applicant moved to ${status.toLowerCase().replaceAll("_", " ")}.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to update applicant");
+      setLoading(false);
+    }
+  }
+
+  async function changeShortlistStatus(applicationId: string, shortlistStatus: string) {
+    setLoading(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/platform/employer", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "updateShortlistStatus", businessEmail, applicationId, shortlistStatus }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to update shortlist");
+      await loadWorkspace(businessEmail);
+      setMessage(`Shortlist moved to ${shortlistStatus.toLowerCase()}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to update shortlist");
       setLoading(false);
     }
   }
@@ -247,31 +272,46 @@ export function EmployerWorkspace() {
         <section className="mt-10 border border-white/10 bg-white/[0.025] p-6">
           <div className="flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
             <div><h2 className="text-2xl font-semibold">Applicants</h2><p className="mt-2 text-sm text-slate-400">{applicants.length} application{applicants.length === 1 ? "" : "s"} connected directly to your published jobs.</p></div>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-3 sm:grid-cols-3">
               <input className={inputClass} placeholder="Search name, email, job, role" value={applicantSearch} onChange={(event) => setApplicantSearch(event.target.value)} />
               <select className={inputClass} value={applicantFilter} onChange={(event) => setApplicantFilter(event.target.value)}>
                 <option value="ALL">All statuses</option>
                 {[...applicationStatuses, "WITHDRAWN"].map((status) => <option key={status} value={status}>{status.replaceAll("_", " ")}</option>)}
+              </select>
+              <select className={inputClass} value={shortlistFilter} onChange={(event) => setShortlistFilter(event.target.value)}>
+                <option value="ALL">All shortlist stages</option>
+                {shortlistStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
               </select>
             </div>
           </div>
           <div className="mt-6 grid gap-4">
             {filteredApplicants.length === 0 ? <p className="border border-dashed border-white/10 p-6 text-slate-500">No applicants match the current filters.</p> : filteredApplicants.map((applicant) => (
               <article key={applicant.application_id} className="border border-white/10 bg-black/30 p-5">
-                <div className="grid gap-5 lg:grid-cols-[1fr_auto]">
+                <div className="grid gap-5 lg:grid-cols-[1fr_260px]">
                   <div>
-                    <div className="flex flex-wrap items-center gap-3"><p className="text-xl font-semibold">{applicant.full_name}</p><span className="border border-white/10 px-2 py-1 text-xs uppercase tracking-[0.14em] text-slate-400">{applicant.status.replaceAll("_", " ")}</span></div>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <p className="text-xl font-semibold">{applicant.full_name}</p>
+                      <span className="border border-white/10 px-2 py-1 text-xs uppercase tracking-[0.14em] text-slate-400">{applicant.status.replaceAll("_", " ")}</span>
+                      <span className={`border px-2 py-1 text-xs uppercase tracking-[0.14em] ${applicant.shortlist_status === "SHORTLISTED" ? "border-amber-300/40 text-amber-200" : "border-white/10 text-slate-400"}`}>{applicant.shortlist_status}</span>
+                      <span className="border border-cyan-300/30 px-2 py-1 text-xs uppercase tracking-[0.14em] text-cyan-200">Match {applicant.match_score ?? 0}%</span>
+                    </div>
                     <p className="mt-2 text-sm text-slate-400">{applicant.email} · {applicant.applicant_location}</p>
                     <p className="mt-2 text-sm text-emerald-200">Applied for {applicant.job_title}</p>
                     <p className="mt-4 text-sm leading-6 text-slate-300">Current role: {applicant.current_role} · Career stage: {applicant.career_stage}</p>
+                    {applicant.match_summary ? <p className="mt-4 border-l border-cyan-300/40 pl-4 text-sm leading-6 text-slate-300">{applicant.match_summary}</p> : null}
                     {applicant.cover_note ? <p className="mt-4 border-l border-emerald-300/40 pl-4 text-sm leading-6 text-slate-300">{applicant.cover_note}</p> : null}
                     <p className="mt-4 text-xs text-slate-500">Resume: {applicant.resume_filename} · {Math.max(1, Math.round(applicant.resume_byte_length / 1024))} KB · Submitted {new Date(applicant.submitted_at).toLocaleString()}</p>
                   </div>
-                  {applicant.status === "WITHDRAWN" ? <span className="h-fit border border-white/10 px-3 py-2 text-sm text-slate-500">Withdrawn by applicant</span> : (
-                    <select className={`${inputClass} h-fit min-w-48`} value={applicant.status} onChange={(event) => changeApplicationStatus(applicant.application_id, event.target.value)} disabled={loading}>
-                      {applicationStatuses.map((status) => <option key={status} value={status}>{status.replaceAll("_", " ")}</option>)}
+                  <div className="grid h-fit gap-3">
+                    <select className={inputClass} value={applicant.shortlist_status} onChange={(event) => changeShortlistStatus(applicant.application_id, event.target.value)} disabled={loading || applicant.status === "WITHDRAWN"}>
+                      {shortlistStatuses.map((status) => <option key={status} value={status}>{status}</option>)}
                     </select>
-                  )}
+                    {applicant.status === "WITHDRAWN" ? <span className="border border-white/10 px-3 py-2 text-sm text-slate-500">Withdrawn by applicant</span> : (
+                      <select className={inputClass} value={applicant.status} onChange={(event) => changeApplicationStatus(applicant.application_id, event.target.value)} disabled={loading}>
+                        {applicationStatuses.map((status) => <option key={status} value={status}>{status.replaceAll("_", " ")}</option>)}
+                      </select>
+                    )}
+                  </div>
                 </div>
               </article>
             ))}
