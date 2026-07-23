@@ -8,7 +8,8 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY . .
-RUN npm run build
+RUN node -e "const fs=require('fs'); const p='src/server/documents/document-repository-service.ts'; const s=fs.readFileSync(p,'utf8'); console.log('DOCUMENT_REPOSITORY_SOURCE_CHECK'); console.log(s.split('\n').slice(68,86).join('\n')); if (s.includes('blobId = existingBlob.rows[0].blob_id')) { throw new Error('STALE_DOCUMENT_REPOSITORY_SOURCE'); }"
+RUN rm -rf .next && npm run build
 
 FROM node:20-bookworm-slim AS runner
 WORKDIR /app
