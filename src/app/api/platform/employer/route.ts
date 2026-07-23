@@ -24,6 +24,12 @@ const allowedTransitions: Record<string, Set<string>> = {
   WITHDRAWN: new Set(),
 };
 
+const allowedJobTransitions: Record<string, Set<string>> = {
+  DRAFT: new Set(["PUBLISHED", "CLOSED"]),
+  PUBLISHED: new Set(["DRAFT", "CLOSED"]),
+  CLOSED: new Set(["DRAFT", "PUBLISHED"]),
+};
+
 type EmployerRow = {
   employer_id: string;
   company_name: string;
@@ -77,6 +83,7 @@ function jsonError(error: unknown) {
   if (
     code.endsWith("_REQUIRED") ||
     code === "INVALID_JOB_STATUS" ||
+    code === "INVALID_JOB_TRANSITION" ||
     code === "INVALID_APPLICATION_STATUS" ||
     code === "INVALID_APPLICATION_TRANSITION" ||
     code === "INVALID_TIMELINE_VISIBILITY"
@@ -188,7 +195,14 @@ export async function POST(request: NextRequest) {
            RETURNING *`,
           [randomUUID(), employerId, title, location, employmentType, description, status],
         );
-        return result.rows[0];
+        const created = result.rows[0];
+        await client.query(
+          `INSERT INTO job_status_events (
+             job_status_event_id, job_id, previous_status, new_status, actor_workspace, actor_identifier
+           ) VALUES ($1, $2, NULL, $3, 'EMPLOYER', $4)`,
+          [randomUUID(), created.job_id, status, businessEmail],
+        );
+        return created;
       });
       return NextResponse.json({ job }, { status: 201 });
     }
@@ -239,16 +253,41 @@ export async function PATCH(request: NextRequest) {
     const database = new PostgresDatabase();
 
     if (action === "updateJobStatus") {
+      const businessEmail = required(body.businessEmail, "BUSINESS_EMAIL_REQUIRED").toLowerCase();
       const jobId = required(body.jobId, "JOB_ID_REQUIRED");
       const status = required(body.status, "JOB_STATUS_REQUIRED").toUpperCase();
       if (!["DRAFT", "PUBLISHED", "CLOSED"].includes(status)) throw new Error("INVALID_JOB_STATUS");
       const job = await database.transaction(async (client) => {
-        const result = await client.query<JobRow>(
-          `UPDATE employer_jobs SET status = $2, updated_at = NOW() WHERE job_id = $1 RETURNING *`,
-          [jobId, status],
+        const currentResult = await client.query<{ status: string }>(
+          `SELECT j.status
+           FROM employer_jobs j
+           JOIN employer_profiles e ON e.employer_id = j.employer_id
+           WHERE j.job_id = $1 AND e.business_email = $2
+           LIMIT 1`,
+          [jobId, businessEmail],
         );
-        if (!result.rows[0]) throw new Error("JOB_NOT_FOUND");
-        return result.rows[0];
+        const previousStatus = currentResult.rows[0]?.status;
+        if (!previousStatus) throw new Error("JOB_NOT_FOUND");
+        if (previousStatus === status) return (await client.query<JobRow>(`SELECT * FROM employer_jobs WHERE job_id = $1`, [jobId])).rows[0];
+        if (!allowedJobTransitions[previousStatus]?.has(status)) throw new Error("INVALID_JOB_TRANSITION");
+        const result = await client.query<JobRow>(
+          `UPDATE employer_jobs SET status = $3, updated_at = NOW()
+           FROM employer_profiles e
+           WHERE employer_jobs.job_id = $1
+             AND employer_jobs.employer_id = e.employer_id
+             AND e.business_email = $2
+           RETURNING employer_jobs.*`,
+          [jobId, businessEmail, status],
+        );
+        const updated = result.rows[0];
+        if (!updated) throw new Error("JOB_NOT_FOUND");
+        await client.query(
+          `INSERT INTO job_status_events (
+             job_status_event_id, job_id, previous_status, new_status, actor_workspace, actor_identifier
+           ) VALUES ($1, $2, $3, $4, 'EMPLOYER', $5)`,
+          [randomUUID(), jobId, previousStatus, status, businessEmail],
+        );
+        return updated;
       });
       return NextResponse.json({ job });
     }
