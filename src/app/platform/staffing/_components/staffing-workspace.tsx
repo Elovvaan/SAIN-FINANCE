@@ -13,6 +13,7 @@ type StaffingProfile = {
 type Candidate = {
   application_id: string;
   application_status: string;
+  shortlist_status: string;
   cover_note: string | null;
   resume_filename: string;
   submitted_at: string;
@@ -33,6 +34,7 @@ type Candidate = {
 
 const inputClass = "w-full border border-white/10 bg-black/40 px-4 py-3 text-white outline-none focus:border-emerald-300/60";
 const placementStatuses = ["NEW", "MATCHED", "SCREENING", "SUBMITTED", "INTERVIEW", "OFFERED", "PLACED", "CLOSED"];
+const shortlistStatuses = ["UNREVIEWED", "SHORTLISTED", "PASSED"];
 
 export function StaffingWorkspace() {
   const [agencyName, setAgencyName] = useState("");
@@ -43,6 +45,7 @@ export function StaffingWorkspace() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [shortlistFilter, setShortlistFilter] = useState("ALL");
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -164,17 +167,43 @@ export function StaffingWorkspace() {
     }
   }
 
+  async function changeShortlistStatus(candidate: Candidate, shortlistStatus: string) {
+    if (!profile) return;
+    setLoading(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/platform/staffing", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "updateShortlistStatus",
+          businessEmail,
+          applicationId: candidate.application_id,
+          shortlistStatus,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to update shortlist");
+      setMessage(`Shortlist moved to ${shortlistStatus.toLowerCase()}.`);
+      await loadWorkspace(businessEmail);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to update shortlist");
+      setLoading(false);
+    }
+  }
+
   const filteredCandidates = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return candidates.filter((candidate) => {
       const placement = candidate.placement_status || "NEW";
       const matchesStatus = statusFilter === "ALL" || placement === statusFilter;
+      const matchesShortlist = shortlistFilter === "ALL" || candidate.shortlist_status === shortlistFilter;
       const haystack = [candidate.full_name, candidate.email, candidate.current_role, candidate.location, candidate.title, candidate.company_name, candidate.job_location, candidate.match_summary || ""]
         .join(" ")
         .toLowerCase();
-      return matchesStatus && (!normalized || haystack.includes(normalized));
+      return matchesStatus && matchesShortlist && (!normalized || haystack.includes(normalized));
     });
-  }, [candidates, query, statusFilter]);
+  }, [candidates, query, statusFilter, shortlistFilter]);
 
   return (
     <main className="min-h-screen bg-[#020504] px-5 py-16 text-white sm:px-8">
@@ -207,11 +236,15 @@ export function StaffingWorkspace() {
               <h2 className="text-2xl font-semibold">Candidate queue</h2>
               <p className="mt-2 text-sm text-slate-400">{filteredCandidates.length} candidate record{filteredCandidates.length === 1 ? "" : "s"}</p>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[520px]">
+            <div className="grid gap-3 sm:grid-cols-3 lg:min-w-[760px]">
               <input className={inputClass} placeholder="Search candidate, job, employer, location, or match summary" value={query} onChange={(event) => setQuery(event.target.value)} />
               <select className={inputClass} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
                 <option value="ALL">All placement statuses</option>
                 {placementStatuses.map((status) => <option key={status}>{status}</option>)}
+              </select>
+              <select className={inputClass} value={shortlistFilter} onChange={(event) => setShortlistFilter(event.target.value)}>
+                <option value="ALL">All shortlist stages</option>
+                {shortlistStatuses.map((status) => <option key={status}>{status}</option>)}
               </select>
             </div>
           </div>
@@ -226,8 +259,9 @@ export function StaffingWorkspace() {
                         <h3 className="text-xl font-semibold">{candidate.full_name}</h3>
                         <p className="mt-1 text-sm text-slate-400">{candidate.email} · {candidate.current_role} · {candidate.location}</p>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="h-fit border border-cyan-400/25 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">Match {candidate.match_score ?? 0}%</span>
+                        <span className={`h-fit border px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] ${candidate.shortlist_status === "SHORTLISTED" ? "border-amber-300/40 text-amber-200" : "border-white/10 text-slate-400"}`}>{candidate.shortlist_status}</span>
                         <span className="h-fit border border-emerald-400/25 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">{candidate.placement_status || "NEW"}</span>
                       </div>
                     </div>
@@ -248,6 +282,12 @@ export function StaffingWorkspace() {
                   </div>
 
                   <div className="grid gap-3">
+                    <div className="border border-white/10 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200">Shortlist decision</p>
+                      <select className={`${inputClass} mt-3`} value={candidate.shortlist_status} onChange={(event) => changeShortlistStatus(candidate, event.target.value)} disabled={loading || !profile}>
+                        {shortlistStatuses.map((status) => <option key={status}>{status}</option>)}
+                      </select>
+                    </div>
                     <div className="border border-white/10 p-4">
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">Candidate match</p>
                       <input className={`${inputClass} mt-3`} type="number" min="0" max="100" value={matchScores[candidate.application_id] ?? String(candidate.match_score ?? 0)} onChange={(event) => setMatchScores((current) => ({ ...current, [candidate.application_id]: event.target.value }))} />
