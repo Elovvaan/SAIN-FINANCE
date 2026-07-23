@@ -16,6 +16,8 @@ type Candidate = {
   cover_note: string | null;
   resume_filename: string;
   submitted_at: string;
+  match_score: number;
+  match_summary: string | null;
   full_name: string;
   email: string;
   current_role: string;
@@ -45,6 +47,8 @@ export function StaffingWorkspace() {
   const [loading, setLoading] = useState(false);
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [statuses, setStatuses] = useState<Record<string, string>>({});
+  const [matchScores, setMatchScores] = useState<Record<string, string>>({});
+  const [matchSummaries, setMatchSummaries] = useState<Record<string, string>>({});
 
   async function loadWorkspace(email = businessEmail) {
     if (!email.trim()) return;
@@ -67,12 +71,18 @@ export function StaffingWorkspace() {
       }
       const nextNotes: Record<string, string> = {};
       const nextStatuses: Record<string, string> = {};
+      const nextMatchScores: Record<string, string> = {};
+      const nextMatchSummaries: Record<string, string> = {};
       for (const candidate of data.candidates || []) {
         nextNotes[candidate.application_id] = candidate.recruiter_note || "";
         nextStatuses[candidate.application_id] = candidate.placement_status || "NEW";
+        nextMatchScores[candidate.application_id] = String(candidate.match_score ?? 0);
+        nextMatchSummaries[candidate.application_id] = candidate.match_summary || "";
       }
       setNotes(nextNotes);
       setStatuses(nextStatuses);
+      setMatchScores(nextMatchScores);
+      setMatchSummaries(nextMatchSummaries);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to load Staffing OS");
     } finally {
@@ -128,12 +138,38 @@ export function StaffingWorkspace() {
     }
   }
 
+  async function saveMatch(candidate: Candidate) {
+    if (!profile) return;
+    setLoading(true);
+    setMessage("");
+    try {
+      const response = await fetch("/api/platform/staffing", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          action: "updateMatchScore",
+          businessEmail,
+          applicationId: candidate.application_id,
+          matchScore: Number(matchScores[candidate.application_id] ?? 0),
+          matchSummary: matchSummaries[candidate.application_id] || "",
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Unable to update candidate match score");
+      setMessage("Candidate match score updated.");
+      await loadWorkspace(businessEmail);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to update candidate match score");
+      setLoading(false);
+    }
+  }
+
   const filteredCandidates = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return candidates.filter((candidate) => {
       const placement = candidate.placement_status || "NEW";
       const matchesStatus = statusFilter === "ALL" || placement === statusFilter;
-      const haystack = [candidate.full_name, candidate.email, candidate.current_role, candidate.location, candidate.title, candidate.company_name, candidate.job_location]
+      const haystack = [candidate.full_name, candidate.email, candidate.current_role, candidate.location, candidate.title, candidate.company_name, candidate.job_location, candidate.match_summary || ""]
         .join(" ")
         .toLowerCase();
       return matchesStatus && (!normalized || haystack.includes(normalized));
@@ -145,7 +181,7 @@ export function StaffingWorkspace() {
       <div className="mx-auto max-w-7xl">
         <p className="text-xs font-semibold uppercase tracking-[0.24em] text-emerald-300">Staffing OS</p>
         <h1 className="mt-4 text-4xl font-semibold sm:text-6xl">Run your staffing pipeline.</h1>
-        <p className="mt-5 max-w-3xl text-lg leading-8 text-slate-400">Manage recruiter operations, review Career OS applicants, add notes, and move candidates through a persistent placement workflow.</p>
+        <p className="mt-5 max-w-3xl text-lg leading-8 text-slate-400">Manage recruiter operations, review Career OS applicants, score candidate fit, add notes, and move candidates through a persistent placement workflow.</p>
 
         {message ? <div className="mt-8 border border-emerald-400/25 bg-emerald-400/[0.07] p-4 text-sm text-emerald-100">{message}</div> : null}
 
@@ -172,7 +208,7 @@ export function StaffingWorkspace() {
               <p className="mt-2 text-sm text-slate-400">{filteredCandidates.length} candidate record{filteredCandidates.length === 1 ? "" : "s"}</p>
             </div>
             <div className="grid gap-3 sm:grid-cols-2 lg:min-w-[520px]">
-              <input className={inputClass} placeholder="Search candidate, job, employer, or location" value={query} onChange={(event) => setQuery(event.target.value)} />
+              <input className={inputClass} placeholder="Search candidate, job, employer, location, or match summary" value={query} onChange={(event) => setQuery(event.target.value)} />
               <select className={inputClass} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
                 <option value="ALL">All placement statuses</option>
                 {placementStatuses.map((status) => <option key={status}>{status}</option>)}
@@ -190,7 +226,10 @@ export function StaffingWorkspace() {
                         <h3 className="text-xl font-semibold">{candidate.full_name}</h3>
                         <p className="mt-1 text-sm text-slate-400">{candidate.email} · {candidate.current_role} · {candidate.location}</p>
                       </div>
-                      <span className="h-fit border border-emerald-400/25 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">{candidate.placement_status || "NEW"}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="h-fit border border-cyan-400/25 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">Match {candidate.match_score ?? 0}%</span>
+                        <span className="h-fit border border-emerald-400/25 px-3 py-2 text-xs font-semibold uppercase tracking-[0.18em] text-emerald-300">{candidate.placement_status || "NEW"}</span>
+                      </div>
                     </div>
                     <div className="mt-5 grid gap-3 sm:grid-cols-2">
                       <div className="border border-white/10 p-4">
@@ -204,10 +243,17 @@ export function StaffingWorkspace() {
                         <p className="mt-1 text-sm text-slate-400">Resume: {candidate.resume_filename}</p>
                       </div>
                     </div>
+                    {candidate.match_summary ? <p className="mt-4 border-l border-cyan-300/40 pl-4 text-sm leading-7 text-slate-300">{candidate.match_summary}</p> : null}
                     {candidate.cover_note ? <p className="mt-4 border-l border-emerald-300/40 pl-4 text-sm leading-7 text-slate-300">{candidate.cover_note}</p> : null}
                   </div>
 
                   <div className="grid gap-3">
+                    <div className="border border-white/10 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-300">Candidate match</p>
+                      <input className={`${inputClass} mt-3`} type="number" min="0" max="100" value={matchScores[candidate.application_id] ?? String(candidate.match_score ?? 0)} onChange={(event) => setMatchScores((current) => ({ ...current, [candidate.application_id]: event.target.value }))} />
+                      <textarea className={`${inputClass} mt-3 min-h-24`} placeholder="Why this candidate matches the role" value={matchSummaries[candidate.application_id] ?? candidate.match_summary ?? ""} onChange={(event) => setMatchSummaries((current) => ({ ...current, [candidate.application_id]: event.target.value }))} />
+                      <button onClick={() => saveMatch(candidate)} disabled={loading || !profile} className="mt-3 w-full border border-cyan-300/40 px-5 py-3 font-semibold text-cyan-200 disabled:opacity-40">Save match score</button>
+                    </div>
                     <select className={inputClass} value={statuses[candidate.application_id] || candidate.placement_status || "NEW"} onChange={(event) => setStatuses((current) => ({ ...current, [candidate.application_id]: event.target.value }))}>
                       {placementStatuses.map((status) => <option key={status}>{status}</option>)}
                     </select>
