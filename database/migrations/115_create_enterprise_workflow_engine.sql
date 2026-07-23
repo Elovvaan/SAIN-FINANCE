@@ -109,6 +109,9 @@ CREATE TABLE IF NOT EXISTS workflow_events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+ALTER TABLE workflow_events
+  ADD COLUMN IF NOT EXISTS workflow_instance_id UUID;
+
 CREATE INDEX IF NOT EXISTS idx_workflow_definitions_institution_status ON workflow_definitions(institution_key, status);
 CREATE INDEX IF NOT EXISTS idx_workflow_instances_institution_status ON workflow_instances(institution_key, status);
 CREATE INDEX IF NOT EXISTS idx_workflow_instances_related_entity ON workflow_instances(institution_key, related_entity_type, related_entity_id);
