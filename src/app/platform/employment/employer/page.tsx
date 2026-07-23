@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { AuthenticatedWorkspaceGate } from "../_components/authenticated-workspace-gate";
+import { NotificationCenter } from "../_components/notification-center";
 import { EmployerWorkspacePage } from "../_components/role-scoped-workspaces";
 
 export const metadata: Metadata = {
@@ -11,6 +12,7 @@ export const metadata: Metadata = {
 export default function EmployerWorkspaceRoute() {
   return (
     <AuthenticatedWorkspaceGate workspace="employer">
+      <NotificationCenter workspace="employer" />
       <EmployerWorkspacePage />
     </AuthenticatedWorkspaceGate>
   );
