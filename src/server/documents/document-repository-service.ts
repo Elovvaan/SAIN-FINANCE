@@ -67,7 +67,7 @@ export async function uploadDocumentVersion(input: UploadDocumentInput) {
 
     const digest = checksum(input.content);
     const byteLength = input.content.byteLength;
-    let blobId = randomUUID();
+    let blobId: string = randomUUID();
     const existingBlob = await client.query<{ blob_id: string }>(
       `SELECT blob_id FROM repository_document_blobs
        WHERE institution_key = $1 AND checksum_sha256 = $2 AND byte_length = $3
