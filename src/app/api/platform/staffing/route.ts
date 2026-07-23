@@ -58,6 +58,8 @@ export async function GET(request: NextRequest) {
         JOIN employer_jobs j ON j.job_id = a.job_id
         JOIN employer_profiles e ON e.employer_id = j.employer_id
         LEFT JOIN staffing_assignments sa ON sa.application_id = a.application_id
+        WHERE j.status = 'PUBLISHED'
+          AND a.status NOT IN ('WITHDRAWN', 'REJECTED', 'HIRED')
         ORDER BY a.submitted_at DESC
       `);
       const timelineResult = await client.query(`
@@ -110,9 +112,15 @@ export async function POST(request: NextRequest) {
         const profileResult = await client.query<{ staffing_profile_id: string }>(`SELECT staffing_profile_id FROM staffing_profiles WHERE business_email = $1 LIMIT 1`, [businessEmail]);
         const staffingProfileId = profileResult.rows[0]?.staffing_profile_id;
         if (!staffingProfileId) throw new Error("STAFFING_PROFILE_NOT_FOUND");
-        const appResult = await client.query(`SELECT application_id, status FROM job_applications WHERE application_id = $1 LIMIT 1`, [applicationId]);
+        const appResult = await client.query(`
+          SELECT a.application_id, a.status, j.status AS job_status
+          FROM job_applications a
+          JOIN employer_jobs j ON j.job_id = a.job_id
+          WHERE a.application_id = $1
+          LIMIT 1
+        `, [applicationId]);
         const application = appResult.rows[0];
-        if (!application || application.status === "WITHDRAWN") throw new Error("APPLICATION_NOT_FOUND");
+        if (!application || application.status === "WITHDRAWN" || application.job_status !== "PUBLISHED") throw new Error("APPLICATION_NOT_FOUND");
         const result = await client.query(`
           INSERT INTO staffing_assignments (staffing_assignment_id, staffing_profile_id, application_id, recruiter_note, placement_status)
           VALUES ($1, $2, $3, $4, $5)
@@ -194,7 +202,11 @@ export async function PATCH(request: NextRequest) {
         );
         if (!profileResult.rows[0]) throw new Error("STAFFING_PROFILE_NOT_FOUND");
         const currentResult = await client.query<{ status: string }>(
-          `SELECT status FROM job_applications WHERE application_id = $1 LIMIT 1`,
+          `SELECT a.status
+           FROM job_applications a
+           JOIN employer_jobs j ON j.job_id = a.job_id
+           WHERE a.application_id = $1 AND j.status = 'PUBLISHED'
+           LIMIT 1`,
           [applicationId],
         );
         const previousStatus = currentResult.rows[0]?.status;
