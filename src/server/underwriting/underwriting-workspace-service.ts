@@ -132,7 +132,7 @@ export async function updateUnderwritingCase(input: {
 }) {
   const database = new PostgresDatabase();
   return database.transaction(async (client) => {
-    const found = await client.query(
+    const found = await client.query<{ underwriting_case_id: string; loan_package_id: string; status: string }>(
       `SELECT underwriting_case_id, loan_package_id, status FROM underwriting_cases
        WHERE institution_key = $1 AND underwriting_case_id = $2 LIMIT 1`,
       [input.operator.institutionKey, input.underwritingCaseId],
