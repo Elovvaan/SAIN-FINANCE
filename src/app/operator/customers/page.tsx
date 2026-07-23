@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { Building2, Loader2, Plus, RefreshCw, Search, UserRound, Users } from "lucide-react";
+import { Building2, Loader2, Plus, RefreshCw, Search, UserRound, Users, type LucideIcon } from "lucide-react";
 
 type Customer = {
   customer_id: string;
@@ -131,11 +131,13 @@ export default function OperatorCustomersPage() {
 
       <div className="mx-auto max-w-7xl px-5 py-8 sm:px-8">
         <section className="grid gap-4 md:grid-cols-3">
-          {[
-            ["Customers", totals.all, Users],
-            ["Individuals", totals.individuals, UserRound],
-            ["Businesses", totals.businesses, Building2],
-          ].map(([label, value, Icon]) => (
+          {(
+            [
+              ["Customers", totals.all, Users],
+              ["Individuals", totals.individuals, UserRound],
+              ["Businesses", totals.businesses, Building2],
+            ] as [string, number, LucideIcon][]
+          ).map(([label, value, Icon]) => (
             <div key={String(label)} className="border border-white/10 bg-white/[0.03] p-5">
               <div className="flex items-center justify-between"><p className="text-sm text-slate-400">{String(label)}</p><Icon className="h-5 w-5 text-emerald-300" /></div>
               <p className="mt-4 text-3xl font-semibold text-white">{String(value)}</p>
