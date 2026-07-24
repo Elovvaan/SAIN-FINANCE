@@ -35,13 +35,14 @@ export default async function InternalOperationsPage({
     <main className="min-h-screen bg-black text-white">
       <header className="sticky top-0 z-50 border-b border-white/10 bg-black/90 backdrop-blur-xl">
         <div className="mx-auto flex min-h-20 max-w-7xl flex-col gap-4 px-5 py-4 sm:px-8 lg:flex-row lg:items-center lg:justify-between">
-          <Link href="/" className="flex items-center gap-3">
+          <Link href="/operator/control-center" className="flex items-center gap-3">
             <span className="flex h-9 w-9 items-center justify-center border border-emerald-400/40 bg-emerald-400/10 text-sm font-semibold text-emerald-300">S</span>
             <span className="text-sm font-semibold uppercase tracking-[0.28em]">SAIN INTERNAL OPERATIONS</span>
           </Link>
-          <div className="flex items-center gap-3 text-sm text-slate-400">
+          <div className="flex flex-wrap items-center gap-3 text-sm text-slate-400">
             <LockKeyhole className="h-4 w-4 text-emerald-300" aria-hidden />
             <span>{session.email}</span>
+            <Link href="/operator/control-center" className="border border-emerald-300/30 bg-emerald-400/10 px-3 py-2 text-emerald-100 hover:bg-emerald-400/20">CEO Control Center</Link>
             <Link href="/operator/login" className="border border-white/10 px-3 py-2 text-slate-300 hover:border-emerald-300/50 hover:text-white">Operator account</Link>
           </div>
         </div>
