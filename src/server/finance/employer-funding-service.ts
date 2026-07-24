@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { FinancialPostingService, type FinancialPostingOperator } from "./financial-posting-service";
 import { PostgresDatabase } from "./postgres-database";
 
+// Database reads and writes in this service must use the transaction client API.
 export type EmployerFundingProfileInput = {
   operator: FinancialPostingOperator;
   employerKey: string;
