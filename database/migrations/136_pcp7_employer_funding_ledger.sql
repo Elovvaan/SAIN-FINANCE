@@ -44,8 +44,8 @@ CREATE TABLE IF NOT EXISTS employer_funding_events (
   CONSTRAINT employer_funding_events_description_not_blank CHECK (BTRIM(description) <> ''),
   CONSTRAINT employer_funding_events_status_check CHECK (status IN ('POSTED','REVERSED')),
   CONSTRAINT employer_funding_events_metadata_object CHECK (jsonb_typeof(metadata) = 'object'),
-  CONSTRAINT employer_funding_events_posting_fk FOREIGN KEY (institution_key, financial_posting_id)
-    REFERENCES financial_postings(institution_key, posting_id) ON DELETE RESTRICT,
+  CONSTRAINT employer_funding_events_posting_fk FOREIGN KEY (financial_posting_id)
+    REFERENCES financial_postings(posting_id) ON DELETE RESTRICT,
   CONSTRAINT employer_funding_events_journal_fk FOREIGN KEY (institution_key, gl_journal_entry_id)
     REFERENCES gl_journal_entries(institution_key, gl_journal_entry_id) ON DELETE RESTRICT,
   UNIQUE (institution_key, idempotency_key),
