@@ -52,26 +52,26 @@ const institutionAreas = [
   },
   {
     label: "Documents",
-    description: "Access the institutional repository and controlled records.",
-    href: "/operator/departments/documents",
+    description: "Access entity records, authority documents, agreements, policies, manuals, and archived records.",
+    href: "/operator/repository",
     icon: FileText,
   },
   {
     label: "Assets",
     description: "Manage institutional assets, collateral, and settlement readiness.",
-    href: "/operator/operations?view=assets",
+    href: "/operator/repository",
     icon: PackageCheck,
   },
   {
     label: "Instruments",
     description: "Review issued, held, pledged, transferred, and retired instruments.",
-    href: "/operator/operations?view=ledger",
+    href: "/operator/repository",
     icon: WalletCards,
   },
   {
     label: "Agreements",
     description: "Control institutional agreements, authority records, and obligations.",
-    href: "/operator/departments/documents",
+    href: "/operator/repository",
     icon: BookOpenCheck,
   },
   {
@@ -146,13 +146,9 @@ export default async function CeoControlCenterPage() {
           <div className="flex flex-wrap items-center gap-3 text-sm text-slate-400">
             <LockKeyhole className="h-4 w-4 text-emerald-300" aria-hidden />
             <span>{session.email}</span>
-            <Link href="/operator/departments" className="border border-emerald-300/30 bg-emerald-400/10 px-3 py-2 text-emerald-100 transition hover:bg-emerald-400/20">Departments</Link>
-            <Link
-              href="/operator/operations"
-              className="border border-white/10 px-3 py-2 text-slate-300 transition hover:border-emerald-300/50 hover:text-white"
-            >
-              Internal operations
-            </Link>
+            <Link href="/operator/repository" className="border border-emerald-300/30 bg-emerald-400/10 px-3 py-2 text-emerald-100 transition hover:bg-emerald-400/20">Repository</Link>
+            <Link href="/operator/departments" className="border border-white/10 px-3 py-2 text-slate-300 transition hover:border-emerald-300/50 hover:text-white">Departments</Link>
+            <Link href="/operator/operations" className="border border-white/10 px-3 py-2 text-slate-300 transition hover:border-emerald-300/50 hover:text-white">Internal operations</Link>
           </div>
         </div>
       </header>
@@ -207,9 +203,7 @@ export default async function CeoControlCenterPage() {
             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-300">Institution overview</p>
             <h2 className="mt-2 text-3xl font-semibold">Executive areas</h2>
           </div>
-          <Link href="/operator/departments" className="text-sm font-semibold text-emerald-300 hover:text-emerald-200">
-            Open departments
-          </Link>
+          <Link href="/operator/repository" className="text-sm font-semibold text-emerald-300 hover:text-emerald-200">Open repository</Link>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
