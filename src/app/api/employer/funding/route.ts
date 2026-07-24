@@ -4,7 +4,7 @@ import { EmployerFundingService } from "@/server/finance/employer-funding-servic
 
 export const runtime = "nodejs";
 
-function allowed(operator: { permissions: string[] }, permission: string) {
+function allowed(operator: { permissions: string[]; roles: string[] }, permission: string) {
   return operator.permissions.includes(permission) || operator.roles.includes("INSTITUTION_ADMIN");
 }
 
