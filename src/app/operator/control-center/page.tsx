@@ -27,6 +27,12 @@ export const metadata: Metadata = {
 
 const institutionAreas = [
   {
+    label: "Departments",
+    description: "Open role-oriented workspaces for lending, accounting, compliance, treasury, documents, security, and administration.",
+    href: "/operator/departments",
+    icon: Building2,
+  },
+  {
     label: "Employees",
     description: "Create, assign, suspend, and review internal operator access.",
     href: "/operator/control-center/employees",
@@ -35,19 +41,19 @@ const institutionAreas = [
   {
     label: "Customers",
     description: "Review customer relationships, status, and servicing activity.",
-    href: "/operator/operations?view=intake",
+    href: "/operator/departments/customer-service",
     icon: Building2,
   },
   {
     label: "Loans",
     description: "Track applications, underwriting, approvals, funding, and servicing.",
-    href: "/operator/operations?view=admin",
+    href: "/operator/departments/lending",
     icon: BadgeDollarSign,
   },
   {
     label: "Documents",
     description: "Access the institutional repository and controlled records.",
-    href: "/operator/documents",
+    href: "/operator/departments/documents",
     icon: FileText,
   },
   {
@@ -65,31 +71,31 @@ const institutionAreas = [
   {
     label: "Agreements",
     description: "Control institutional agreements, authority records, and obligations.",
-    href: "/operator/documents",
+    href: "/operator/departments/documents",
     icon: BookOpenCheck,
   },
   {
     label: "Ledger",
     description: "Inspect journals, postings, reversals, balances, and audit lineage.",
-    href: "/operator/operations?view=ledger",
+    href: "/operator/departments/accounting",
     icon: Database,
   },
   {
     label: "Settlement",
     description: "Review payment execution, settlement queues, and reconciliation.",
-    href: "/operator/operations?view=treasury",
+    href: "/operator/departments/treasury",
     icon: Landmark,
   },
   {
     label: "Security",
     description: "Review access controls, sessions, restrictions, and security posture.",
-    href: "/operator/operations?view=admin",
+    href: "/operator/departments/security",
     icon: ShieldCheck,
   },
   {
     label: "Compliance",
     description: "Review institutional controls, exceptions, and compliance activity.",
-    href: "/operator/operations?view=admin",
+    href: "/operator/departments/compliance",
     icon: Scale,
   },
   {
@@ -105,7 +111,7 @@ const executiveSignals = [
     label: "Pending approvals",
     value: "Review queue",
     detail: "Open internal approvals and exception items.",
-    href: "/operator/operations?view=admin",
+    href: "/operator/departments/executive",
     icon: BookOpenCheck,
   },
   {
@@ -119,7 +125,7 @@ const executiveSignals = [
     label: "Security alerts",
     value: "Review activity",
     detail: "Inspect access, restrictions, login events, and operator status.",
-    href: "/operator/operations?view=admin",
+    href: "/operator/departments/security",
     icon: AlertTriangle,
   },
 ] as const;
@@ -140,6 +146,7 @@ export default async function CeoControlCenterPage() {
           <div className="flex flex-wrap items-center gap-3 text-sm text-slate-400">
             <LockKeyhole className="h-4 w-4 text-emerald-300" aria-hidden />
             <span>{session.email}</span>
+            <Link href="/operator/departments" className="border border-emerald-300/30 bg-emerald-400/10 px-3 py-2 text-emerald-100 transition hover:bg-emerald-400/20">Departments</Link>
             <Link
               href="/operator/operations"
               className="border border-white/10 px-3 py-2 text-slate-300 transition hover:border-emerald-300/50 hover:text-white"
@@ -200,8 +207,8 @@ export default async function CeoControlCenterPage() {
             <p className="text-xs font-semibold uppercase tracking-[0.22em] text-emerald-300">Institution overview</p>
             <h2 className="mt-2 text-3xl font-semibold">Executive areas</h2>
           </div>
-          <Link href="/operator/operations" className="text-sm font-semibold text-emerald-300 hover:text-emerald-200">
-            Open operations
+          <Link href="/operator/departments" className="text-sm font-semibold text-emerald-300 hover:text-emerald-200">
+            Open departments
           </Link>
         </div>
 
