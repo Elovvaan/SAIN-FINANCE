@@ -24,13 +24,31 @@ export async function POST(request: Request) {
       throw new Error("FINANCIAL_POSTING_FORBIDDEN");
     }
 
-    const body = (await request.json()) as Omit<FinancialPostingInput, "operator">;
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const uuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const lines = Array.isArray(body.lines) ? (body.lines as Array<Record<string, unknown>>) : [];
+    for (const line of lines) {
+      const glAccountId = typeof line.glAccountId === "string" ? line.glAccountId : "";
+      if (!uuid.test(glAccountId)) throw new Error("FINANCIAL_POSTING_LINE_INVALID");
+    }
+
     const result = await FinancialPostingService.post({
-      ...body,
       operator: {
         institutionKey: operator.institutionKey,
         userId: operator.userId,
       },
+      idempotencyKey: String(body.idempotencyKey ?? ""),
+      sourceModule: String(body.sourceModule ?? ""),
+      sourceReference: String(body.sourceReference ?? ""),
+      accountingDate: String(body.accountingDate ?? ""),
+      description: String(body.description ?? ""),
+      lines: lines as unknown as FinancialPostingInput["lines"],
+      metadata:
+        body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)
+          ? (body.metadata as Record<string, unknown>)
+          : undefined,
+      autoPost: body.autoPost === undefined ? undefined : Boolean(body.autoPost),
     });
 
     return NextResponse.json({ posting: result }, { status: result.idempotentReplay ? 200 : 201 });
