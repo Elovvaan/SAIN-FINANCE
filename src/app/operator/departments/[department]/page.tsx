@@ -35,7 +35,7 @@ const departmentConfig = {
     controls: [
       { label: "Employee administration", href: "/operator/control-center/employees", icon: Users },
       { label: "Institution overview", href: "/operator/control-center", icon: Activity },
-      { label: "Administrative review", href: "/operator/operations?view=admin", icon: ShieldCheck },
+      { label: "Institutional repository", href: "/operator/repository", icon: FileCheck2 },
     ],
   },
   lending: {
@@ -67,7 +67,7 @@ const departmentConfig = {
     queues: ["Compliance alerts", "Document review", "Restricted account review"],
     controls: [
       { label: "Administrative review", href: "/operator/operations?view=admin", icon: ShieldCheck },
-      { label: "Institutional documents", href: "/operator/documents", icon: FileCheck2 },
+      { label: "Institutional repository", href: "/operator/repository", icon: FileCheck2 },
       { label: "Audit trail", href: "/operator/operations?view=kernel", icon: Activity },
     ],
   },
@@ -88,8 +88,8 @@ const departmentConfig = {
     description: "Institutional records, agreements, instruments, authority documents, and controlled versions.",
     queues: ["New uploads", "Integrity review", "Version freeze requests"],
     controls: [
-      { label: "Document repository", href: "/operator/documents", icon: FileCheck2 },
-      { label: "Agreement review", href: "/operator/documents", icon: ClipboardCheck },
+      { label: "Institutional repository", href: "/operator/repository", icon: FileCheck2 },
+      { label: "Legacy repository view", href: "/operator/documents", icon: ClipboardCheck },
       { label: "Audit history", href: "/operator/operations?view=kernel", icon: Activity },
     ],
   },
@@ -101,7 +101,7 @@ const departmentConfig = {
     controls: [
       { label: "Customer intake", href: "/operator/operations?view=intake", icon: ClipboardCheck },
       { label: "Administrative review", href: "/operator/operations?view=admin", icon: ShieldCheck },
-      { label: "Document access", href: "/operator/documents", icon: FileCheck2 },
+      { label: "Institutional repository", href: "/operator/repository", icon: FileCheck2 },
     ],
   },
   security: {
@@ -153,6 +153,7 @@ export default async function DepartmentWorkspacePage({
           <div className="flex flex-wrap items-center gap-3 text-sm text-slate-400">
             <LockKeyhole className="h-4 w-4 text-emerald-300" aria-hidden />
             <span>{session.email}</span>
+            <Link href="/operator/repository" className="border border-white/10 px-3 py-2 text-slate-300 hover:border-emerald-300/50 hover:text-white">Repository</Link>
             <Link href="/operator/departments" className="border border-white/10 px-3 py-2 text-slate-300 hover:border-emerald-300/50 hover:text-white">All departments</Link>
           </div>
         </div>
