@@ -75,16 +75,16 @@ export class EmployerFundingService {
   static async getProfile(operator: FinancialPostingOperator, employerKeyInput: string) {
     const employerKey = required(employerKeyInput, "EMPLOYER_KEY_REQUIRED");
     const database = new PostgresDatabase();
-    const result = await database.transaction((client) =>
-      client.query(
+    return database.transaction(async (client) => {
+      const result = await client.query(
         `SELECT employer_funding_profile_id,employer_key,display_name,cash_gl_account_id,
                 funding_liability_gl_account_id,status,created_at,updated_at
          FROM employer_funding_profiles
          WHERE institution_key=$1 AND employer_key=$2 LIMIT 1`,
         [operator.institutionKey, employerKey],
-      ),
-    );
-    return result.rows[0] ?? null;
+      );
+      return result.rows[0] ?? null;
+    });
   }
 
   static async post(input: EmployerFundingInput) {
@@ -92,17 +92,20 @@ export class EmployerFundingService {
     const idempotencyKey = required(input.idempotencyKey, "EMPLOYER_FUNDING_IDEMPOTENCY_KEY_REQUIRED");
     const description = required(input.description, "EMPLOYER_FUNDING_DESCRIPTION_REQUIRED");
     const fundingAmount = amount(input.amount);
-    input.accountingDate = input.accountingDate.trim();
-    if (!input.accountingDate) throw new Error("EMPLOYER_FUNDING_ACCOUNTING_DATE_REQUIRED");
+    const accountingDate = input.accountingDate.trim();
+    if (!accountingDate) throw new Error("EMPLOYER_FUNDING_ACCOUNTING_DATE_REQUIRED");
 
     const database = new PostgresDatabase();
-    const replay = await database.query(
-      `SELECT employer_funding_event_id,employer_key,amount::text,accounting_date::text,description,
-              status,financial_posting_id,gl_journal_entry_id,created_at
-       FROM employer_funding_events WHERE institution_key=$1 AND idempotency_key=$2 LIMIT 1`,
-      [input.operator.institutionKey, idempotencyKey],
-    );
-    if (replay.rows[0]) return { ...replay.rows[0], idempotentReplay: true };
+    const existing = await database.transaction(async (client) => {
+      const replay = await client.query(
+        `SELECT employer_funding_event_id,employer_key,amount::text,accounting_date::text,description,
+                status,financial_posting_id,gl_journal_entry_id,created_at
+         FROM employer_funding_events WHERE institution_key=$1 AND idempotency_key=$2 LIMIT 1`,
+        [input.operator.institutionKey, idempotencyKey],
+      );
+      return replay.rows[0] ?? null;
+    });
+    if (existing) return { ...existing, idempotentReplay: true };
 
     const profile = await this.getProfile(input.operator, employerKey) as null | {
       cash_gl_account_id: string;
@@ -116,7 +119,7 @@ export class EmployerFundingService {
       idempotencyKey: `employer-funding:${idempotencyKey}`,
       sourceModule: "EMPLOYER_FUNDING",
       sourceReference: employerKey,
-      accountingDate: input.accountingDate,
+      accountingDate,
       description,
       lines: [
         { glAccountId: profile.cash_gl_account_id, debitAmount: fundingAmount, description },
@@ -126,34 +129,38 @@ export class EmployerFundingService {
       autoPost: true,
     });
 
-    const result = await database.query(
-      `INSERT INTO employer_funding_events (
-         employer_funding_event_id,institution_key,employer_key,idempotency_key,amount,
-         accounting_date,description,status,financial_posting_id,gl_journal_entry_id,created_by,metadata
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,'POSTED',$8,$9,$10,$11::jsonb)
-       ON CONFLICT (institution_key,idempotency_key) DO UPDATE SET idempotency_key=EXCLUDED.idempotency_key
-       RETURNING employer_funding_event_id,employer_key,amount::text,accounting_date::text,
-                 description,status,financial_posting_id,gl_journal_entry_id,created_at`,
-      [
-        randomUUID(), input.operator.institutionKey, employerKey, idempotencyKey, fundingAmount,
-        input.accountingDate, description, posting.postingId, posting.glJournalEntryId,
-        input.operator.userId, JSON.stringify(input.metadata ?? {}),
-      ],
-    );
-    return { ...result.rows[0], idempotentReplay: posting.idempotentReplay };
+    return database.transaction(async (client) => {
+      const result = await client.query(
+        `INSERT INTO employer_funding_events (
+           employer_funding_event_id,institution_key,employer_key,idempotency_key,amount,
+           accounting_date,description,status,financial_posting_id,gl_journal_entry_id,created_by,metadata
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,'POSTED',$8,$9,$10,$11::jsonb)
+         ON CONFLICT (institution_key,idempotency_key) DO UPDATE SET idempotency_key=EXCLUDED.idempotency_key
+         RETURNING employer_funding_event_id,employer_key,amount::text,accounting_date::text,
+                   description,status,financial_posting_id,gl_journal_entry_id,created_at`,
+        [
+          randomUUID(), input.operator.institutionKey, employerKey, idempotencyKey, fundingAmount,
+          accountingDate, description, posting.postingId, posting.glJournalEntryId,
+          input.operator.userId, JSON.stringify(input.metadata ?? {}),
+        ],
+      );
+      return { ...result.rows[0], idempotentReplay: posting.idempotentReplay };
+    });
   }
 
   static async list(operator: FinancialPostingOperator, employerKeyInput: string) {
     const employerKey = required(employerKeyInput, "EMPLOYER_KEY_REQUIRED");
     const database = new PostgresDatabase();
-    const result = await database.query(
-      `SELECT employer_funding_event_id,employer_key,amount::text,accounting_date::text,
-              description,status,financial_posting_id,gl_journal_entry_id,created_at
-       FROM employer_funding_events
-       WHERE institution_key=$1 AND employer_key=$2
-       ORDER BY created_at DESC LIMIT 100`,
-      [operator.institutionKey, employerKey],
-    );
-    return result.rows;
+    return database.transaction(async (client) => {
+      const result = await client.query(
+        `SELECT employer_funding_event_id,employer_key,amount::text,accounting_date::text,
+                description,status,financial_posting_id,gl_journal_entry_id,created_at
+         FROM employer_funding_events
+         WHERE institution_key=$1 AND employer_key=$2
+         ORDER BY created_at DESC LIMIT 100`,
+        [operator.institutionKey, employerKey],
+      );
+      return result.rows;
+    });
   }
 }
