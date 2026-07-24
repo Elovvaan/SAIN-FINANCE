@@ -92,6 +92,7 @@ export class EmployerFundingService {
     const idempotencyKey = required(input.idempotencyKey, "EMPLOYER_FUNDING_IDEMPOTENCY_KEY_REQUIRED");
     const description = required(input.description, "EMPLOYER_FUNDING_DESCRIPTION_REQUIRED");
     const fundingAmount = amount(input.amount);
+    input.accountingDate = input.accountingDate.trim();
     if (!input.accountingDate) throw new Error("EMPLOYER_FUNDING_ACCOUNTING_DATE_REQUIRED");
 
     const database = new PostgresDatabase();
