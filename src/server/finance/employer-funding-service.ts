@@ -75,12 +75,14 @@ export class EmployerFundingService {
   static async getProfile(operator: FinancialPostingOperator, employerKeyInput: string) {
     const employerKey = required(employerKeyInput, "EMPLOYER_KEY_REQUIRED");
     const database = new PostgresDatabase();
-    const result = await database.query(
-      `SELECT employer_funding_profile_id,employer_key,display_name,cash_gl_account_id,
-              funding_liability_gl_account_id,status,created_at,updated_at
-       FROM employer_funding_profiles
-       WHERE institution_key=$1 AND employer_key=$2 LIMIT 1`,
-      [operator.institutionKey, employerKey],
+    const result = await database.transaction((client) =>
+      client.query(
+        `SELECT employer_funding_profile_id,employer_key,display_name,cash_gl_account_id,
+                funding_liability_gl_account_id,status,created_at,updated_at
+         FROM employer_funding_profiles
+         WHERE institution_key=$1 AND employer_key=$2 LIMIT 1`,
+        [operator.institutionKey, employerKey],
+      ),
     );
     return result.rows[0] ?? null;
   }
