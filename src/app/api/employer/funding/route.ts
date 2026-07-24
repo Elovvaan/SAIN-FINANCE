@@ -39,14 +39,28 @@ export async function PUT(request: NextRequest) {
   if (!allowed(operator, "EMPLOYER_FUNDING_CONFIGURE")) return NextResponse.json({ error: "PERMISSION_REQUIRED" }, { status: 403 });
 
   try {
-    const body = await request.json();
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const uuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+    const cashGlAccountId = String(body.cashGlAccountId || "");
+    const fundingLiabilityGlAccountId = String(body.fundingLiabilityGlAccountId || "");
+    if (!uuid.test(cashGlAccountId) || !uuid.test(fundingLiabilityGlAccountId)) {
+      throw new Error("EMPLOYER_FUNDING_GL_ACCOUNT_ID_INVALID");
+    }
+
+    const metadata =
+      body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)
+        ? (body.metadata as Record<string, unknown>)
+        : undefined;
+
     const profile = await EmployerFundingService.configure({
       operator,
       employerKey: String(body.employerKey || ""),
       displayName: String(body.displayName || ""),
-      cashGlAccountId: String(body.cashGlAccountId || ""),
-      fundingLiabilityGlAccountId: String(body.fundingLiabilityGlAccountId || ""),
-      metadata: body.metadata,
+      cashGlAccountId,
+      fundingLiabilityGlAccountId,
+      metadata,
     });
     return NextResponse.json({ profile });
   } catch (error) {
