@@ -32,13 +32,25 @@ export async function POST(request: Request) {
       throw new Error("FINANCIAL_POSTING_FORBIDDEN");
     }
 
-    const body = (await request.json()) as ReversalRequest;
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>;
+    const uuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    const originalJournalEntryId = String(body.originalJournalEntryId ?? "");
+    if (!uuid.test(originalJournalEntryId)) throw new Error("FINANCIAL_POSTING_ORIGINAL_INVALID");
+
     const result = await FinancialPostingService.reverse({
-      ...body,
       operator: {
         institutionKey: operator.institutionKey,
         userId: operator.userId,
       },
+      originalJournalEntryId,
+      idempotencyKey: String(body.idempotencyKey ?? ""),
+      accountingDate: String(body.accountingDate ?? ""),
+      description: String(body.description ?? ""),
+      metadata:
+        body.metadata && typeof body.metadata === "object" && !Array.isArray(body.metadata)
+          ? (body.metadata as Record<string, unknown>)
+          : undefined,
     });
 
     return NextResponse.json({ posting: result }, { status: result.idempotentReplay ? 200 : 201 });
