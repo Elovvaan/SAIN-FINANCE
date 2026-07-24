@@ -28,6 +28,16 @@ type UserListRow = {
   status: string;
   email_verified_at: Date | string | null;
   created_at: Date | string;
+  last_login_at: Date | string | null;
+  roles: string[] | null;
+  permissions: string[] | null;
+  role_assignments: Array<{
+    userRoleId: string;
+    roleCode: string;
+    status: string;
+    effectiveAt: string;
+    expiresAt?: string;
+  }> | null;
 };
 
 type ManagedUserRow = {
@@ -161,10 +171,62 @@ export async function listOperatorUsers(institutionKey: string, actorUserId: str
   return database.transaction(async (client) => {
     await assertInstitutionAdministrator(client, institutionKey, actorUserId);
     const result = await client.query<UserListRow>(
-      `SELECT user_id, email, display_name, status, email_verified_at, created_at
+      `SELECT
+         users.user_id,
+         users.email,
+         users.display_name,
+         users.status,
+         users.email_verified_at,
+         users.created_at,
+         MAX(login_events.created_at) FILTER (WHERE login_events.outcome = 'SUCCESS') AS last_login_at,
+         COALESCE(
+           array_agg(DISTINCT roles.role_code)
+             FILTER (
+               WHERE roles.role_code IS NOT NULL
+                 AND user_roles.status = 'ACTIVE'
+                 AND user_roles.effective_at <= NOW()
+                 AND (user_roles.expires_at IS NULL OR user_roles.expires_at > NOW())
+             ),
+           '{}'
+         ) AS roles,
+         COALESCE(
+           array_agg(DISTINCT permissions.permission_code)
+             FILTER (
+               WHERE permissions.permission_code IS NOT NULL
+                 AND user_roles.status = 'ACTIVE'
+                 AND user_roles.effective_at <= NOW()
+                 AND (user_roles.expires_at IS NULL OR user_roles.expires_at > NOW())
+             ),
+           '{}'
+         ) AS permissions,
+         COALESCE(
+           jsonb_agg(
+             DISTINCT jsonb_build_object(
+               'userRoleId', user_roles.user_role_id,
+               'roleCode', roles.role_code,
+               'status', user_roles.status,
+               'effectiveAt', user_roles.effective_at,
+               'expiresAt', user_roles.expires_at
+             )
+           ) FILTER (WHERE user_roles.user_role_id IS NOT NULL),
+           '[]'::jsonb
+         ) AS role_assignments
        FROM users
-       WHERE institution_key = $1
-       ORDER BY created_at DESC, email ASC`,
+       LEFT JOIN login_events
+         ON login_events.institution_key = users.institution_key
+        AND login_events.user_id = users.user_id
+       LEFT JOIN user_roles
+         ON user_roles.institution_key = users.institution_key
+        AND user_roles.user_id = users.user_id
+       LEFT JOIN roles ON roles.role_id = user_roles.role_id
+       LEFT JOIN role_permissions ON role_permissions.role_id = roles.role_id
+       LEFT JOIN permissions
+         ON permissions.permission_id = role_permissions.permission_id
+        AND permissions.status = 'ACTIVE'
+       WHERE users.institution_key = $1
+       GROUP BY users.user_id, users.email, users.display_name, users.status,
+                users.email_verified_at, users.created_at
+       ORDER BY users.created_at DESC, users.email ASC`,
       [institutionKey],
     );
     return result.rows.map((row) => ({
@@ -174,6 +236,14 @@ export async function listOperatorUsers(institutionKey: string, actorUserId: str
       status: row.status,
       emailVerifiedAt: row.email_verified_at ? new Date(row.email_verified_at).toISOString() : undefined,
       createdAt: new Date(row.created_at).toISOString(),
+      lastLoginAt: row.last_login_at ? new Date(row.last_login_at).toISOString() : undefined,
+      roles: row.roles ?? [],
+      permissions: row.permissions ?? [],
+      roleAssignments: (row.role_assignments ?? []).map((assignment) => ({
+        ...assignment,
+        effectiveAt: new Date(assignment.effectiveAt).toISOString(),
+        expiresAt: assignment.expiresAt ? new Date(assignment.expiresAt).toISOString() : undefined,
+      })),
     }));
   });
 }
